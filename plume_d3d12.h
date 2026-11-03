@@ -19,6 +19,14 @@
 #   include <d3d12.h>
 #endif
 
+// Dynamic depth bias (D3D12_OPTIONS16, ID3D12GraphicsCommandList9::RSSetDepthBias) is declared by the
+// Agility SDK headers and by the Windows SDK from 10.0.26100 on. Whether a device has it is up to the
+// runtime the application loads (an Agility SDK runtime, or the system's) and the driver: the
+// capability check below asks, and a device without it keeps the static depth bias.
+#if defined(PLUME_D3D12_AGILITY_SDK_ENABLED) ||     (defined(NTDDI_WIN11_GE) && defined(WDK_NTDDI_VERSION) && (WDK_NTDDI_VERSION >= NTDDI_WIN11_GE))
+#   define PLUME_D3D12_DYNAMIC_DEPTH_BIAS 1
+#endif
+
 #include <dxgi1_4.h>
 
 #include "D3D12MemAlloc.h"
@@ -170,7 +178,7 @@ namespace plume {
         ID3D12GraphicsCommandList *d3d = nullptr;
         ID3D12GraphicsCommandList1 *d3dV1 = nullptr;
         ID3D12GraphicsCommandList4 *d3dV4 = nullptr;
-#   ifdef PLUME_D3D12_AGILITY_SDK_ENABLED
+#   ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
         ID3D12GraphicsCommandList9 *d3dV9 = nullptr;
 #   endif
         ID3D12CommandAllocator *commandAllocator = nullptr;
@@ -181,6 +189,11 @@ namespace plume {
         const D3D12PipelineLayout *activeComputePipelineLayout = nullptr;
         const D3D12PipelineLayout *activeGraphicsPipelineLayout = nullptr;
         const D3D12GraphicsPipeline *activeGraphicsPipeline = nullptr;
+        // The last setDepthBias of this recording. SetPipelineState puts the pipeline's own depth
+        // bias back (DirectX-Specs, VulkanOn12: dynamic pipeline state), unlike Vulkan's dynamic state,
+        // so a pipeline with the dynamic flag gets this again when it is set.
+        float dynamicDepthBias[3] = {};
+        bool dynamicDepthBiasSet = false;
         bool descriptorHeapsSet = false;
         D3D12_PRIMITIVE_TOPOLOGY activeTopology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
         uint32_t activeStencilRef = 0;
@@ -402,6 +415,7 @@ namespace plume {
         std::vector<RenderInputSlot> inputSlots;
         D3D12_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
         uint32_t stencilRef = 0;
+        bool dynamicDepthBias = false;
 
         D3D12GraphicsPipeline(D3D12Device *device, const RenderGraphicsPipelineDesc &desc);
         ~D3D12GraphicsPipeline() override;
