@@ -345,6 +345,8 @@ namespace plume {
         void writeTimestamp(const RenderQueryPool *queryPool, uint32_t queryIndex) override;
         void beginOcclusionQuery(const RenderQueryPool *queryPool, uint32_t queryIndex) override;
         void endOcclusionQuery(const RenderQueryPool *queryPool, uint32_t queryIndex) override;
+        void beginDebugLabel(const char *label) override;
+        void endDebugLabel() override;
         void checkActiveRenderPass();
         void endActiveRenderPass();
         void setDescriptorSet(VkPipelineBindPoint bindPoint, const VulkanPipelineLayout *pipelineLayout, const RenderDescriptorSet *descriptorSet, uint32_t setIndex);
@@ -454,6 +456,7 @@ namespace plume {
     struct VulkanInterface : RenderInterface {
         VkInstance instance = VK_NULL_HANDLE;
         VkApplicationInfo appInfo = {};
+        bool debugUtils = false; // VK_EXT_debug_utils enabled on the instance.
         RenderInterfaceCapabilities capabilities;
         std::vector<std::string> deviceNames;
 

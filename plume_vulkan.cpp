@@ -70,6 +70,10 @@ namespace plume {
         // Tells the system Vulkan loader to enumerate portability drivers, if supported.
         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
 #   endif
+#   ifndef VULKAN_OBJECT_NAMES_ENABLED
+        // Command buffer labels for profilers and captures (required above when object names are on).
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+#   endif
     };
     
     static const std::unordered_set<std::string> RequiredDeviceExtensions = {
@@ -3582,6 +3586,29 @@ namespace plume {
         vkCmdEndQuery(vk, interfaceQueryPool->vk, queryIndex);
     }
 
+    void VulkanCommandList::beginDebugLabel(const char *label) {
+        assert(label != nullptr);
+
+        // A label is recorded where it falls: inside the render pass open at the time, or outside any. Opening or
+        // ending one here would move the pass boundaries the caller's barriers rely on.
+        if (!queue->device->capabilities.debugLabels) {
+            return;
+        }
+
+        VkDebugUtilsLabelEXT labelInfo = {};
+        labelInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        labelInfo.pLabelName = label;
+        vkCmdBeginDebugUtilsLabelEXT(vk, &labelInfo);
+    }
+
+    void VulkanCommandList::endDebugLabel() {
+        if (!queue->device->capabilities.debugLabels) {
+            return;
+        }
+
+        vkCmdEndDebugUtilsLabelEXT(vk);
+    }
+
     void VulkanCommandList::checkActiveRenderPass() {
         assert(targetFramebuffer != nullptr);
         
@@ -4253,6 +4280,7 @@ namespace plume {
         capabilities.dynamicDepthBias = true;
         capabilities.queryPools = true;
         capabilities.occlusionQueries = deviceFeatures.features.occlusionQueryPrecise;
+        capabilities.debugLabels = renderInterface->debugUtils && (vkCmdBeginDebugUtilsLabelEXT != nullptr) && (vkCmdEndDebugUtilsLabelEXT != nullptr);
         capabilities.uma = (description.type == RenderDeviceType::INTEGRATED) && hasHostVisibleDeviceLocalMemory;
         capabilities.gpuUploadHeap = capabilities.uma;
 
@@ -4703,6 +4731,7 @@ namespace plume {
         }
 
         volkLoadInstance(instance);
+        debugUtils = (requiredExtensions.count(VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != 0) || (supportedOptionalExtensions.count(VK_EXT_DEBUG_UTILS_EXTENSION_NAME) != 0);
 
         // Fill capabilities.
         capabilities.shaderFormat = RenderShaderFormat::SPIRV;

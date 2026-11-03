@@ -154,6 +154,12 @@ namespace plume {
         // the same render pass on Vulkan (begin opens it).
         virtual void beginOcclusionQuery(const RenderQueryPool *queryPool, uint32_t queryIndex) = 0;
         virtual void endOcclusionQuery(const RenderQueryPool *queryPool, uint32_t queryIndex) = 0;
+        // A named region of the list for GPU profilers and captures: a PIX event on D3D12, a debug utils
+        // label on Vulkan (capabilities.debugLabels). Nothing else changes: no render pass begins or ends,
+        // no state is set. A begin may end in a later list submitted to the same queue. Empty where the backend
+        // has no labels.
+        virtual void beginDebugLabel(const char *label) { (void)(label); }
+        virtual void endDebugLabel() { }
 
         // Concrete implementation shortcuts.
         inline void barriers(RenderBarrierStages stages, const RenderBufferBarrier &barrier) {

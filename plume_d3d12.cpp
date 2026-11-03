@@ -2505,6 +2505,19 @@ namespace plume {
         d3d->ResolveQueryData(interfaceQueryPool->d3d, D3D12_QUERY_TYPE_OCCLUSION, queryIndex, 1, readbackBuffer->d3d, queryIndex * sizeof(uint64_t));
     }
 
+    void D3D12CommandList::beginDebugLabel(const char *label) {
+        assert(label != nullptr);
+
+        // Metadata 0 is the PIX event encoding for a UTF-16 string (WINPIX_EVENT_UNICODE_VERSION), the one PIX,
+        // Nsight and RenderDoc read without the WinPixEventRuntime. The size counts the terminator.
+        const std::wstring wideLabel = Utf8ToUtf16(label);
+        d3d->BeginEvent(0, wideLabel.c_str(), UINT((wideLabel.size() + 1) * sizeof(wchar_t)));
+    }
+
+    void D3D12CommandList::endDebugLabel() {
+        d3d->EndEvent();
+    }
+
     void D3D12CommandList::checkDescriptorHeaps() {
         if (!descriptorHeapsSet) {
             ID3D12DescriptorHeap *descriptorHeaps[] = { queue->device->viewHeapAllocator->heap, queue->device->samplerHeapAllocator->heap };
@@ -3878,6 +3891,7 @@ namespace plume {
                 capabilities.triangleFan = triangleFanSupportOption;
                 capabilities.dynamicDepthBias = dynamicDepthBiasOption;
                 capabilities.occlusionQueries = true;
+                capabilities.debugLabels = true;
                 capabilities.uma = uma;
 
                 // Pretend GPU Upload heaps are supported if UMA is supported, as

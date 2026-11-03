@@ -227,6 +227,8 @@ namespace plume {
         void writeTimestamp(const RenderQueryPool *queryPool, uint32_t queryIndex) override;
         void beginOcclusionQuery(const RenderQueryPool *queryPool, uint32_t queryIndex) override;
         void endOcclusionQuery(const RenderQueryPool *queryPool, uint32_t queryIndex) override;
+        void beginDebugLabel(const char *label) override;
+        void endDebugLabel() override;
         void checkDescriptorHeaps();
         void notifyDescriptorHeapWasChangedExternally();
         void checkTopology();
