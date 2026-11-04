@@ -3951,6 +3951,12 @@ namespace plume {
         allocatorDesc.Flags = D3D12MA::ALLOCATOR_FLAG_DEFAULT_POOLS_NOT_ZEROED | 
             D3D12MA::ALLOCATOR_FLAG_MSAA_TEXTURES_ALWAYS_COMMITTED | D3D12MA::ALLOCATOR_FLAG_DONT_PREFER_SMALL_BUFFERS_COMMITTED;
 
+        // Heaps of 4 MiB instead of D3D12MA's default 64 MiB. On an integrated GPU whose dedicated memory is smaller than what the
+        // application allocates, Windows' video memory manager tries every ~5 s to move a heap that didn't fit back into the dedicated
+        // memory, then has to move it out again: with 64 MiB heaps that is two 64 MiB copies on the GPU and a ~25 ms stall every 5 s.
+        // With 4 MiB heaps the stall is gone, and frames were also slightly faster on both an integrated and a discrete GPU.
+        allocatorDesc.PreferredBlockSize = 4 * 1024 * 1024;
+
         res = D3D12MA::CreateAllocator(&allocatorDesc, &allocator);
         if (FAILED(res)) {
             fprintf(stderr, "D3D12MA::CreateAllocator failed with error code 0x%lX.\n", res);
