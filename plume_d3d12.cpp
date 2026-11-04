@@ -1884,7 +1884,7 @@ namespace plume {
         d3d->QueryInterface(IID_PPV_ARGS(&d3dV1));
         d3d->QueryInterface(IID_PPV_ARGS(&d3dV4));
 
-#   ifdef PLUME_D3D12_AGILITY_SDK_ENABLED
+#   ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
         d3d->QueryInterface(IID_PPV_ARGS(&d3dV9));
 #   endif
 
@@ -1893,7 +1893,7 @@ namespace plume {
 
     D3D12CommandList::~D3D12CommandList() {
         // Every interface obtained through QueryInterface holds a reference of its own.
-#   ifdef PLUME_D3D12_AGILITY_SDK_ENABLED
+#   ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
         if (d3dV9 != nullptr) {
             d3dV9->Release();
         }
@@ -1939,6 +1939,7 @@ namespace plume {
         activeGraphicsPipeline = nullptr;
         activeTopology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
         activeStencilRef = 0;
+        dynamicDepthBiasSet = false;
         descriptorHeapsSet = false;
     }
     
@@ -2092,6 +2093,11 @@ namespace plume {
 
             d3d->SetPipelineState(graphicsPipeline->d3d);
             activeGraphicsPipeline = graphicsPipeline;
+#       ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
+            if (graphicsPipeline->dynamicDepthBias && dynamicDepthBiasSet) {
+                d3dV9->RSSetDepthBias(dynamicDepthBias[0], dynamicDepthBias[1], dynamicDepthBias[2]);
+            }
+#       endif
             break;
         }
         case D3D12Pipeline::Type::Raytracing: {
@@ -2283,12 +2289,16 @@ namespace plume {
     }
 
     void D3D12CommandList::setDepthBias(float depthBias, float depthBiasClamp, float slopeScaledDepthBias) {
-#   ifdef PLUME_D3D12_AGILITY_SDK_ENABLED
+#   ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
         assert(d3dV9 != nullptr);
         assert(queue->device->capabilities.dynamicDepthBias && "Dynamic depth bias is unsupported on this device.");
+        dynamicDepthBias[0] = depthBias;
+        dynamicDepthBias[1] = depthBiasClamp;
+        dynamicDepthBias[2] = slopeScaledDepthBias;
+        dynamicDepthBiasSet = true;
         d3dV9->RSSetDepthBias(depthBias, depthBiasClamp, slopeScaledDepthBias);
 #   else
-        assert(false && "Dynamic depth bias is unsupported without the Agility SDK.");
+        assert(false && "Dynamic depth bias is unsupported without the Agility SDK or the Windows SDK 10.0.26100 headers.");
 #   endif
     }
 
@@ -3194,10 +3204,11 @@ namespace plume {
         psoDesc.RasterizerState.SlopeScaledDepthBias = desc.slopeScaledDepthBias;
 
         if (desc.dynamicDepthBiasEnabled) {
-#       ifdef PLUME_D3D12_AGILITY_SDK_ENABLED
+#       ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
             psoDesc.Flags |= D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS;
+            dynamicDepthBias = true;
 #       else
-            assert(false && "Dynamic depth bias is unsupported without the Agility SDK.");
+            assert(false && "Dynamic depth bias is unsupported without the Agility SDK or the Windows SDK 10.0.26100 headers.");
 #       endif
         }
 
@@ -3847,12 +3858,18 @@ namespace plume {
                 triangleFanSupportOption = d3d12Options15.TriangleFanSupported;
             }
 
-            // Check if dynamic depth bias and GPU upload heap are supported.
+#       endif
+
+#       ifdef PLUME_D3D12_DYNAMIC_DEPTH_BIAS
+            // Check if dynamic depth bias and GPU upload heap are supported. Only the Agility SDK build
+            // uses the GPU upload heap.
             D3D12_FEATURE_DATA_D3D12_OPTIONS16 d3d12Options16 = {};
             res = deviceOption->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &d3d12Options16, sizeof(d3d12Options16));
             if (SUCCEEDED(res)) {
                 dynamicDepthBiasOption = d3d12Options16.DynamicDepthBiasSupported;
+#           ifdef PLUME_D3D12_AGILITY_SDK_ENABLED
                 gpuUploadHeapOption = d3d12Options16.GPUUploadHeapSupported;
+#           endif
             }
 #       endif
 
