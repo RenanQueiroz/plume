@@ -486,7 +486,9 @@ namespace plume {
         case RenderHeapType::READBACK:
             return D3D12_HEAP_TYPE_READBACK;
         case RenderHeapType::GPU_UPLOAD:
-            return D3D12_HEAP_TYPE_GPU_UPLOAD;
+            // D3D12_HEAP_TYPE_GPU_UPLOAD, written as its value: the Windows SDK before 10.0.26100 and mingw-w64's
+            // d3d12.h do not declare it (the Agility SDK headers and the newer Windows SDK do).
+            return static_cast<D3D12_HEAP_TYPE>(5);
         default:
             assert(false && "Unknown heap type.");
             return D3D12_HEAP_TYPE_DEFAULT;
