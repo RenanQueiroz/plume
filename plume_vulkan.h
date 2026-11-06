@@ -79,6 +79,10 @@ namespace plume {
         VkImage vk = VK_NULL_HANDLE;
         VkImageView imageView = VK_NULL_HANDLE;
         VkFormat imageFormat = VK_FORMAT_UNDEFINED;
+        // The usage and creation flags the image was made with (0 for an image Plume did not create, a swap chain's).
+        // External code that tags the image (FidelityFX, Streamline) is asked for them: Vulkan cannot query them.
+        VkImageUsageFlags imageUsage = 0;
+        VkImageCreateFlags imageFlags = 0;
         VkImageSubresourceRange imageSubresourceRange = {};
         VulkanDevice *device = nullptr;
         VulkanPool *pool = nullptr;

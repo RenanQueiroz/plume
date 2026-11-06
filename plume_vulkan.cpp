@@ -1032,6 +1032,8 @@ namespace plume {
         }
 
         imageFormat = imageInfo.format;
+        imageUsage = imageInfo.usage;
+        imageFlags = imageInfo.flags;
         fillSubresourceRange();
 
         VmaAllocationCreateInfo createInfo = {};

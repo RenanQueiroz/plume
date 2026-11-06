@@ -451,6 +451,9 @@ namespace plume {
             NONE = 0U,
             RENDER_TARGET = 1U << 0,
             DEPTH_TARGET = 1U << 1,
+            // A texture that a compute shader writes (a temporal upscaler's output, for one) needs both of the next two:
+            // STORAGE gives a Vulkan image its storage usage and is ignored elsewhere, UNORDERED_ACCESS allows unordered
+            // access on D3D12 and Metal and is ignored by Vulkan.
             STORAGE = 1U << 2,
             UNORDERED_ACCESS = 1U << 3,
             CUBE = 1U << 4
