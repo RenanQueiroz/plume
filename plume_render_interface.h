@@ -103,6 +103,14 @@ namespace plume {
 
         // Only valid if displayTiming is enabled in capabilities.
         virtual uint32_t getRefreshRate() const = 0;
+
+        // The colour space the swap chain presents in (what the desc asked for).
+        virtual RenderSwapChainColorSpace getColorSpace() const { return RenderSwapChainColorSpace::SRGB_NONLINEAR; }
+
+        // HDR10 swap chains: tells the display the content's light levels, kept across resize().
+        // False when this is not an HDR10 swap chain or the backend cannot pass it on (Vulkan without
+        // VK_EXT_hdr_metadata).
+        virtual bool setHdrMetadata(const RenderHdrMetadata &metadata) { return false; }
     };
 
     struct RenderFramebuffer {

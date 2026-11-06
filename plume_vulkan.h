@@ -241,6 +241,9 @@ namespace plume {
         uint64_t currentPresentId = 0;
         bool immediatePresentModeSupported = false;
         bool mailboxPresentModeSupported = false;
+        bool colorSpaceUnavailable = false;
+        bool hdrMetadataSet = false;
+        RenderHdrMetadata hdrMetadata;
 
         VulkanSwapChain(VulkanCommandQueue *commandQueue, const RenderSwapChainDesc &desc);
         ~VulkanSwapChain() override;
@@ -258,9 +261,12 @@ namespace plume {
         RenderWindow getWindow() const override;
         bool isEmpty() const override;
         uint32_t getRefreshRate() const override;
+        RenderSwapChainColorSpace getColorSpace() const override;
+        bool setHdrMetadata(const RenderHdrMetadata &metadata) override;
         void getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const;
         void releaseSwapChain();
         void releaseImageViews();
+        void applyHdrMetadata();
     };
 
     struct VulkanFramebuffer : RenderFramebuffer {
@@ -421,6 +427,7 @@ namespace plume {
         VkPhysicalDeviceSampleLocationsPropertiesEXT sampleLocationProperties = {};
         std::unique_ptr<RenderBuffer> nullBuffer;
         bool loadStoreOpNoneSupported = false;
+        bool hdrMetadataSupported = false;
         bool nullDescriptorSupported = false;
 
         VulkanDevice(VulkanInterface *renderInterface, const std::string &preferredDeviceName);

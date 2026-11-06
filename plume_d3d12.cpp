@@ -7,6 +7,8 @@
 
 #include "plume_d3d12.h"
 
+#include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 #include <dxgi1_5.h>
@@ -150,6 +152,8 @@ namespace plume {
             return DXGI_FORMAT_R11G11B10_FLOAT;
         case RenderFormat::B5G5R5A1_UNORM:
             return DXGI_FORMAT_B5G5R5A1_UNORM;
+        case RenderFormat::R10G10B10A2_UNORM:
+            return DXGI_FORMAT_R10G10B10A2_UNORM;
         case RenderFormat::R32_FLOAT:
             return DXGI_FORMAT_R32_FLOAT;
         case RenderFormat::R32_UINT:
@@ -1374,6 +1378,15 @@ namespace plume {
         }
 
         d3d = static_cast<IDXGISwapChain3 *>(swapChain1);
+
+        // HDR10: the colour space has to be accepted before anything is drawn. When the output cannot present
+        // it the swap chain is released and stays empty; createSwapChain turns that into null.
+        if ((desc.colorSpace != RenderSwapChainColorSpace::SRGB_NONLINEAR) && !applyColorSpace()) {
+            d3d->Release();
+            d3d = nullptr;
+            return;
+        }
+
         d3d->SetMaximumFrameLatency(desc.maxFrameLatency);
         waitableObject = d3d->GetFrameLatencyWaitableObject();
 
@@ -1393,7 +1406,8 @@ namespace plume {
     }
 
     D3D12SwapChain::~D3D12SwapChain() {
-        for (uint32_t i = 0; i < desc.textureCount; i++) {
+        // The textures only exist once the swap chain was made (a refused HDR10 colour space ends the constructor early).
+        for (uint32_t i = 0; i < textures.size(); i++) {
             if (textures[i].d3d != nullptr) {
                 textures[i].d3d->Release();
                 textures[i].d3d = nullptr;
@@ -1442,6 +1456,13 @@ namespace plume {
         }
 
         setTextures();
+
+        // Not assumed to survive the buffers: put the HDR10 state back (a failure here leaves the old one).
+        if (desc.colorSpace != RenderSwapChainColorSpace::SRGB_NONLINEAR) {
+            applyColorSpace();
+            applyHdrMetadata();
+        }
+
         return true;
     }
 
@@ -1511,6 +1532,74 @@ namespace plume {
 
     uint32_t D3D12SwapChain::getRefreshRate() const {
         return 0;
+    }
+
+    RenderSwapChainColorSpace D3D12SwapChain::getColorSpace() const {
+        return desc.colorSpace;
+    }
+
+    bool D3D12SwapChain::applyColorSpace() {
+        if (desc.colorSpace != RenderSwapChainColorSpace::HDR10_ST2084) {
+            return false;
+        }
+
+        // CHECK: CheckColorSpaceSupport answers for the output the window is on; whether it does for a swap
+        // chain made on another adapter than the one driving that output (hybrid graphics) is not verified.
+        const DXGI_COLOR_SPACE_TYPE colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+        UINT support = 0;
+        HRESULT res = d3d->CheckColorSpaceSupport(colorSpace, &support);
+        if (FAILED(res) || ((support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) == 0)) {
+            fprintf(stderr, "The output cannot present the HDR10 colour space (CheckColorSpaceSupport 0x%lX, support 0x%X).\n", res, support);
+            return false;
+        }
+
+        res = d3d->SetColorSpace1(colorSpace);
+        if (FAILED(res)) {
+            fprintf(stderr, "SetColorSpace1 failed with error code 0x%lX.\n", res);
+            return false;
+        }
+
+        return true;
+    }
+
+    void D3D12SwapChain::applyHdrMetadata() {
+        if (!hdrMetadataSet || (d3d == nullptr)) {
+            return;
+        }
+
+        IDXGISwapChain4 *swapChain4 = nullptr;
+        if (FAILED(d3d->QueryInterface(IID_PPV_ARGS(&swapChain4))) || (swapChain4 == nullptr)) {
+            return;
+        }
+
+        // BT.2020 primaries and the D65 white point, in units of 0.00002.
+        DXGI_HDR_METADATA_HDR10 metadata = {};
+        metadata.RedPrimary[0] = 35400;
+        metadata.RedPrimary[1] = 14600;
+        metadata.GreenPrimary[0] = 8500;
+        metadata.GreenPrimary[1] = 39850;
+        metadata.BluePrimary[0] = 6550;
+        metadata.BluePrimary[1] = 2300;
+        metadata.WhitePoint[0] = 15635;
+        metadata.WhitePoint[1] = 16450;
+        // Mastering luminance is in units of 0.0001 nits, the content light levels in whole nits.
+        metadata.MaxMasteringLuminance = UINT(std::lround(std::max(hdrMetadata.maxMasteringLuminance, 0.0f) * 10000.0f));
+        metadata.MinMasteringLuminance = UINT(std::lround(std::max(hdrMetadata.minMasteringLuminance, 0.0f) * 10000.0f));
+        metadata.MaxContentLightLevel = UINT16(std::clamp(std::lround(hdrMetadata.maxContentLightLevel), 0L, 65535L));
+        metadata.MaxFrameAverageLightLevel = UINT16(std::clamp(std::lround(hdrMetadata.maxFrameAverageLightLevel), 0L, 65535L));
+        swapChain4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(metadata), &metadata);
+        swapChain4->Release();
+    }
+
+    bool D3D12SwapChain::setHdrMetadata(const RenderHdrMetadata &metadata) {
+        if ((desc.colorSpace != RenderSwapChainColorSpace::HDR10_ST2084) || (d3d == nullptr)) {
+            return false;
+        }
+
+        hdrMetadata = metadata;
+        hdrMetadataSet = true;
+        applyHdrMetadata();
+        return true;
     }
 
     // D3D12Framebuffer
@@ -2765,7 +2854,15 @@ namespace plume {
     }
 
     std::unique_ptr<RenderSwapChain> D3D12CommandQueue::createSwapChain(const RenderSwapChainDesc &desc) {
-        return std::make_unique<D3D12SwapChain>(this, desc);
+        std::unique_ptr<D3D12SwapChain> swapChain = std::make_unique<D3D12SwapChain>(this, desc);
+
+        // An SDR swap chain that failed to build is left empty for the caller to see, as it always was. A swap
+        // chain that was asked for another colour space and could not get it is not usable as one.
+        if ((desc.colorSpace != RenderSwapChainColorSpace::SRGB_NONLINEAR) && (swapChain->d3d == nullptr)) {
+            return nullptr;
+        }
+
+        return swapChain;
     }
 
     void D3D12CommandQueue::executeCommandLists(const RenderCommandList **commandLists, uint32_t commandListCount, RenderCommandSemaphore **waitSemaphores, uint32_t waitSemaphoreCount, RenderCommandSemaphore **signalSemaphores, uint32_t signalSemaphoreCount, RenderCommandFence *signalFence) {

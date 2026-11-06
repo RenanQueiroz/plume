@@ -228,6 +228,8 @@ namespace plume {
                     return RenderFormat::R11G11B10_FLOAT;
                 case MTL::PixelFormatBGR5A1Unorm:
                     return RenderFormat::B5G5R5A1_UNORM;
+                case MTL::PixelFormatRGB10A2Unorm: // CHECK: Metal is not built here; the metal-cpp name is from memory.
+                    return RenderFormat::R10G10B10A2_UNORM;
                 case MTL::PixelFormatR32Float:
                     return RenderFormat::R32_FLOAT;
                 case MTL::PixelFormatR32Uint:
@@ -373,6 +375,8 @@ namespace plume {
                 return MTL::PixelFormatRG11B10Float;
             case RenderFormat::B5G5R5A1_UNORM:
                 return MTL::PixelFormatBGR5A1Unorm;
+            case RenderFormat::R10G10B10A2_UNORM:
+                return MTL::PixelFormatRGB10A2Unorm;
             case RenderFormat::R32_FLOAT:
                 return MTL::PixelFormatR32Float;
             case RenderFormat::R32_UINT:
@@ -3726,6 +3730,11 @@ namespace plume {
     }
 
     std::unique_ptr<RenderSwapChain> MetalCommandQueue::createSwapChain(const RenderSwapChainDesc &desc) {
+        // HDR10 output is not wired on Metal.
+        if (desc.colorSpace != RenderSwapChainColorSpace::SRGB_NONLINEAR) {
+            return nullptr;
+        }
+
         return std::make_unique<MetalSwapChain>(this, desc);
     }
 
