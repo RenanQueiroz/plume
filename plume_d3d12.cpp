@@ -1411,6 +1411,13 @@ namespace plume {
     }
 
     bool D3D12SwapChain::present(uint32_t textureIndex, RenderCommandSemaphore **waitSemaphores, uint32_t waitSemaphoreCount) {
+        const D3D12InterfaceHooks &hooks = commandQueue->device->renderInterface->hooks;
+        if (hooks.upgradeSwapChainAtPresent != nullptr) {
+            IDXGISwapChain1 *current = d3d;
+            hooks.upgradeSwapChainAtPresent(hooks.userData, &current);
+            d3d = static_cast<IDXGISwapChain3 *>(current);
+        }
+
         // If using present wait, we prefer using a SyncInterval of 0 even when Vsync is enabled. Tearing won't happen if DXGI_PRESENT_ALLOW_TEARING is not specified.
         const bool tearingAllowed = (swapChainFlags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) != 0U;
         UINT syncInterval = (vsyncEnabled && !desc.enablePresentWait) ? 1 : 0;

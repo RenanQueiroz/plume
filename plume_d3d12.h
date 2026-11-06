@@ -503,10 +503,11 @@ namespace plume {
     // What an application can hand to the D3D12 interface it creates: a wrapper over the DXGI factory, the device and
     // the swap chains, as NVIDIA Streamline's manual hooking wants (slUpgradeInterface). Each callback gets a pointer to
     // the interface pointer Plume just made and may replace it with the wrapper (of the same interface); Plume keeps
-    // and releases whatever it is left with, so the wrapper takes over the reference the original had. Null: nothing.
-    // CHECK: that Streamline's slUpgradeInterface hands the original's reference to its wrapper (it does not take a
-    // second one), and that its wrappers answer for the versions Plume uses (ID3D12Device8, IDXGISwapChain3): read in its
-    // documentation, not run.
+    // and releases whatever it is left with. A wrapper that takes a reference of its own to the original (Streamline's
+    // does: its constructor calls AddRef) needs the callback to Release the original's, or the original is never freed.
+    // Null: nothing.
+    // CHECK: that Streamline's wrappers answer for the versions Plume uses (ID3D12Device8, IDXGISwapChain3): read in its
+    // source, not run.
     struct D3D12InterfaceHooks {
         void *userData = nullptr;
 
@@ -519,6 +520,15 @@ namespace plume {
         // Right after each swap chain (IDXGISwapChain1, used as an IDXGISwapChain3) is created, for an application
         // that wraps the swap chains only and not the factory.
         void (*upgradeSwapChain)(void *userData, IDXGISwapChain1 **swapChain) = nullptr;
+
+        // Before each present, with the pointer the swap chain presents on (IDXGISwapChain1, used as an IDXGISwapChain3):
+        // for a wrapper that cannot exist when the swap chain is made. Streamline's cannot: its wrapper may only be used
+        // once Streamline has fully started (a call through it before that runs the plugins' start a second time), which
+        // takes seconds. The callback may replace the pointer with a wrapper of the same interface, as for upgradeSwapChain
+        // (and release the original if the wrapper holds its own reference); Plume presents on what it is left with, and
+        // the back buffers it already holds stay valid. Called on the thread that presents: with nothing to do it must
+        // return at once.
+        void (*upgradeSwapChainAtPresent)(void *userData, IDXGISwapChain1 **swapChain) = nullptr;
     };
 
     struct D3D12Interface : RenderInterface {
