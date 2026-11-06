@@ -243,6 +243,10 @@ namespace plume {
         VkCompositeAlphaFlagBitsKHR pickedAlphaFlag = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         std::vector<VulkanTexture> textures;
         uint64_t currentPresentId = 0;
+        // VK_NV_low_latency2: the swap chain was made in the latency mode; and the id of the frame the next present ends (0: none), which
+        // present() takes once as its VkPresentIdKHR unless present wait numbers the presents.
+        bool latencyMode = false;
+        uint64_t latencyPresentId = 0;
         bool immediatePresentModeSupported = false;
         bool mailboxPresentModeSupported = false;
         bool colorSpaceUnavailable = false;
@@ -436,6 +440,9 @@ namespace plume {
         // can be chained into vkGetPhysicalDeviceMemoryProperties2.
         bool memoryBudgetSupported = false;
         bool nullDescriptorSupported = false;
+        // The device enabled VK_NV_low_latency2 (with the presentId and timeline semaphore features) / VK_AMD_anti_lag.
+        bool nvLowLatency = false;
+        bool amdAntiLag = false;
 
         VulkanDevice(VulkanInterface *renderInterface, const std::string &preferredDeviceName);
         ~VulkanDevice() override;
