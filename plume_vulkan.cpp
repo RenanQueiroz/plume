@@ -4614,11 +4614,24 @@ namespace plume {
 
     // VulkanInterface
 
-    VulkanInterface::VulkanInterface() {
-        VkResult res = volkInitialize();
-        if (res != VK_SUCCESS) {
-            fprintf(stderr, "volkInitialize failed with error code 0x%X.\n", res);
-            return;
+    VulkanInterface::VulkanInterface(const VulkanInterfaceHooks &hooks) {
+        VkResult res = VK_SUCCESS;
+        if (hooks.getInstanceProcAddr != nullptr) {
+            // CHECK: volk loads the global functions through the replacement here and every instance and device
+            // function through it after vkCreateInstance (volkLoadInstance), as Streamline's interposer expects for
+            // the functions it intercepts; its documentation shows vkGetDeviceProcAddr for the device ones.
+            volkInitializeCustom(hooks.getInstanceProcAddr);
+            if (vkCreateInstance == nullptr) {
+                fprintf(stderr, "The replacement vkGetInstanceProcAddr gave no vkCreateInstance.\n");
+                return;
+            }
+        }
+        else {
+            res = volkInitialize();
+            if (res != VK_SUCCESS) {
+                fprintf(stderr, "volkInitialize failed with error code 0x%X.\n", res);
+                return;
+            }
         }
 
         appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -4779,8 +4792,12 @@ namespace plume {
 
     // Global creation function.
 
-    std::unique_ptr<RenderInterface> CreateVulkanInterface() {
-        std::unique_ptr<VulkanInterface> createdInterface = std::make_unique<VulkanInterface>();
+    std::unique_ptr<RenderInterface> CreateVulkanInterface(const VulkanInterfaceHooks &hooks) {
+        std::unique_ptr<VulkanInterface> createdInterface = std::make_unique<VulkanInterface>(hooks);
         return createdInterface->isValid() ? std::move(createdInterface) : nullptr;
+    }
+
+    std::unique_ptr<RenderInterface> CreateVulkanInterface() {
+        return CreateVulkanInterface(VulkanInterfaceHooks());
     }
 };

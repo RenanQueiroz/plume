@@ -453,6 +453,20 @@ namespace plume {
         bool endCapture() override;
     };
 
+    // What an application can hand to the Vulkan interface it creates.
+    struct VulkanInterfaceHooks {
+        // The entry point every Vulkan function is loaded through, instead of the system loader's
+        // vkGetInstanceProcAddr, for a layer that sits between the application and the driver. NVIDIA Streamline's
+        // sl.interposer.dll exports one: it returns its own vkCreateInstance, vkCreateDevice, vkCreateSwapchainKHR,
+        // vkQueuePresentKHR and vkAcquireNextImageKHR (which add the extensions, features and queues Streamline asks
+        // for) and the loader's function for everything else. An application that wants a feature of its own on the
+        // instance or the device can return its own wrapper for vkCreateInstance or vkCreateDevice the same way. The
+        // device creation chain Plume passes holds individual feature structs and pEnabledFeatures, so a wrapper adds
+        // individual structs too: a VkPhysicalDeviceFeatures2 or a VkPhysicalDeviceVulkan11/12/13Features next to them
+        // is invalid. Null: the system loader's.
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
+    };
+
     struct VulkanInterface : RenderInterface {
         VkInstance instance = VK_NULL_HANDLE;
         VkApplicationInfo appInfo = {};
@@ -460,7 +474,7 @@ namespace plume {
         RenderInterfaceCapabilities capabilities;
         std::vector<std::string> deviceNames;
 
-        VulkanInterface();
+        VulkanInterface(const VulkanInterfaceHooks &hooks = VulkanInterfaceHooks());
 
         ~VulkanInterface() override;
         std::unique_ptr<RenderDevice> createDevice(const std::string &preferredDeviceName) override;
@@ -468,4 +482,7 @@ namespace plume {
         const std::vector<std::string> &getDeviceNames() const override;
         bool isValid() const;
     };
+
+    // The same as the CreateVulkanInterface() without arguments, with the hooks above.
+    std::unique_ptr<RenderInterface> CreateVulkanInterface(const VulkanInterfaceHooks &hooks);
 };

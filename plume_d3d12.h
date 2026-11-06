@@ -500,17 +500,42 @@ namespace plume {
         bool endCapture() override;
     };
 
+    // What an application can hand to the D3D12 interface it creates: a wrapper over the DXGI factory, the device and
+    // the swap chains, as NVIDIA Streamline's manual hooking wants (slUpgradeInterface). Each callback gets a pointer to
+    // the interface pointer Plume just made and may replace it with the wrapper (of the same interface); Plume keeps
+    // and releases whatever it is left with, so the wrapper takes over the reference the original had. Null: nothing.
+    // CHECK: that Streamline's slUpgradeInterface hands the original's reference to its wrapper (it does not take a
+    // second one), and that its wrappers answer for the versions Plume uses (ID3D12Device8, IDXGISwapChain3): read in its
+    // documentation, not run.
+    struct D3D12InterfaceHooks {
+        void *userData = nullptr;
+
+        // Right after the factory (IDXGIFactory4) is created. Swap chains made by a wrapped factory come back wrapped.
+        void (*upgradeFactory)(void *userData, IDXGIFactory4 **factory) = nullptr;
+
+        // Once the adapter is chosen and the device (ID3D12Device8) made. Command queues are made through it.
+        void (*upgradeDevice)(void *userData, ID3D12Device8 **device) = nullptr;
+
+        // Right after each swap chain (IDXGISwapChain1, used as an IDXGISwapChain3) is created, for an application
+        // that wraps the swap chains only and not the factory.
+        void (*upgradeSwapChain)(void *userData, IDXGISwapChain1 **swapChain) = nullptr;
+    };
+
     struct D3D12Interface : RenderInterface {
         IDXGIFactory4 *dxgiFactory = nullptr;
+        D3D12InterfaceHooks hooks;
         RenderInterfaceCapabilities capabilities;
         std::vector<std::string> deviceNames;
         bool allowTearing = false;
 
-        D3D12Interface();
+        D3D12Interface(const D3D12InterfaceHooks &hooks = D3D12InterfaceHooks());
         ~D3D12Interface() override;
         std::unique_ptr<RenderDevice> createDevice(const std::string &preferredDeviceName) override;
         const RenderInterfaceCapabilities &getCapabilities() const override;
         const std::vector<std::string> &getDeviceNames() const override;
         bool isValid() const;
     };
+
+    // The same as the CreateD3D12Interface() without arguments, with the hooks above.
+    std::unique_ptr<RenderInterface> CreateD3D12Interface(const D3D12InterfaceHooks &hooks);
 };

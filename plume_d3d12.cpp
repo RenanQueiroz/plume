@@ -1367,6 +1367,11 @@ namespace plume {
             return;
         }
 
+        const D3D12InterfaceHooks &hooks = commandQueue->device->renderInterface->hooks;
+        if (hooks.upgradeSwapChain != nullptr) {
+            hooks.upgradeSwapChain(hooks.userData, &swapChain1);
+        }
+
         res = dxgiFactory->MakeWindowAssociation(desc.renderWindow, DXGI_MWA_NO_ALT_ENTER);
         if (FAILED(res)) {
             fprintf(stderr, "MakeWindowAssociation failed with error code 0x%lX.\n", res);
@@ -3941,6 +3946,10 @@ namespace plume {
             return;
         }
 
+        if (renderInterface->hooks.upgradeDevice != nullptr) {
+            renderInterface->hooks.upgradeDevice(renderInterface->hooks.userData, &d3d);
+        }
+
         #ifdef D3D12_DEBUG_SET_STABLE_POWER_STATE
             d3d->SetStablePowerState(TRUE);
         #endif
@@ -4338,7 +4347,9 @@ namespace plume {
 
     // D3D12Interface
 
-    D3D12Interface::D3D12Interface() {
+    D3D12Interface::D3D12Interface(const D3D12InterfaceHooks &hooks) {
+        this->hooks = hooks;
+
         // Create DXGI Factory.
         UINT dxgiFactoryFlags = 0;
 
@@ -4359,6 +4370,10 @@ namespace plume {
         if (FAILED(res)) {
             fprintf(stderr, "CreateDXGIFactory2 failed with error code 0x%lX.\n", res);
             return;
+        }
+
+        if (hooks.upgradeFactory != nullptr) {
+            hooks.upgradeFactory(hooks.userData, &dxgiFactory);
         }
 
         // Check for support for allowing tearing on the swap chain.
@@ -4414,8 +4429,12 @@ namespace plume {
 
     // Global creation function.
     
-    std::unique_ptr<RenderInterface> CreateD3D12Interface() {
-        std::unique_ptr<D3D12Interface> createdInterface = std::make_unique<D3D12Interface>();
+    std::unique_ptr<RenderInterface> CreateD3D12Interface(const D3D12InterfaceHooks &hooks) {
+        std::unique_ptr<D3D12Interface> createdInterface = std::make_unique<D3D12Interface>(hooks);
         return createdInterface->isValid() ? std::move(createdInterface) : nullptr;
+    }
+
+    std::unique_ptr<RenderInterface> CreateD3D12Interface() {
+        return CreateD3D12Interface(D3D12InterfaceHooks());
     }
 };
