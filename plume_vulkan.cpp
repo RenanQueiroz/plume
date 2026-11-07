@@ -74,6 +74,8 @@ namespace plume {
         // Command buffer labels for profilers and captures (required above when object names are on).
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
 #   endif
+        // Lists the HDR10 colour space among the surface formats.
+        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
     };
     
     static const std::unordered_set<std::string> RequiredDeviceExtensions = {
@@ -100,6 +102,7 @@ namespace plume {
         VK_KHR_PRESENT_ID_EXTENSION_NAME,
         VK_KHR_PRESENT_WAIT_EXTENSION_NAME,
         VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME,
+        VK_EXT_HDR_METADATA_EXTENSION_NAME,
         // Vulkan spec requires this to be enabled if supported by the driver.
         VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
     };
@@ -187,6 +190,9 @@ namespace plume {
         case RenderFormat::B5G5R5A1_UNORM:
             // Same bit layout as DXGI_FORMAT_B5G5R5A1_UNORM: B 0-4, G 5-9, R 10-14, A 15.
             return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+        case RenderFormat::R10G10B10A2_UNORM:
+            // Same bit layout as DXGI_FORMAT_R10G10B10A2_UNORM: R 0-9, G 10-19, B 20-29, A 30-31.
+            return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         case RenderFormat::R32_FLOAT:
             return VK_FORMAT_R32_SFLOAT;
         case RenderFormat::R32_UINT:
@@ -2240,25 +2246,42 @@ namespace plume {
         for (uint32_t i = 0; i < surfaceFormatCount; i++) {
             if (surfaceFormats[i].format == requestedFormat) {
                 compatibleSurfaceFormats.emplace_back(surfaceFormats[i]);
-                break;
             }
         }
 
         if (compatibleSurfaceFormats.empty()) {
             fprintf(stderr, "No compatible surface formats were found.\n");
+            colorSpaceUnavailable = true;
             return;
         }
 
-        // Pick the preferred color space, if not available, pick whatever first shows up on the list.
-        for (const VkSurfaceFormatKHR &surfaceFormat : compatibleSurfaceFormats) {
-            if (surfaceFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                pickedSurfaceFormat = surfaceFormat;
-                break;
+        if (desc.colorSpace == RenderSwapChainColorSpace::HDR10_ST2084) {
+            // Only listed when VK_EXT_swapchain_colorspace is enabled and the surface's output can present it.
+            for (const VkSurfaceFormatKHR &surfaceFormat : compatibleSurfaceFormats) {
+                if (surfaceFormat.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
+                    pickedSurfaceFormat = surfaceFormat;
+                    break;
+                }
+            }
+
+            if (pickedSurfaceFormat.format == VK_FORMAT_UNDEFINED) {
+                fprintf(stderr, "The surface does not list the HDR10_ST2084 colour space for the requested format.\n");
+                colorSpaceUnavailable = true;
+                return;
             }
         }
+        else {
+            // Pick the preferred color space, if not available, pick whatever first shows up on the list.
+            for (const VkSurfaceFormatKHR &surfaceFormat : compatibleSurfaceFormats) {
+                if (surfaceFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                    pickedSurfaceFormat = surfaceFormat;
+                    break;
+                }
+            }
 
-        if (pickedSurfaceFormat.format == VK_FORMAT_UNDEFINED) {
-            pickedSurfaceFormat = compatibleSurfaceFormats[0];
+            if (pickedSurfaceFormat.format == VK_FORMAT_UNDEFINED) {
+                pickedSurfaceFormat = compatibleSurfaceFormats[0];
+            }
         }
 
         // Sets the required presentation mode.
@@ -2437,6 +2460,9 @@ namespace plume {
             textures[i].createImageView(pickedSurfaceFormat.format);
         }
 
+        // The metadata belongs to the swap chain object that was just made.
+        applyHdrMetadata();
+
         return true;
     }
 
@@ -2495,6 +2521,42 @@ namespace plume {
         }
 
         return std::lround(1000000000.0 / refreshCycle.refreshDuration);
+    }
+
+    RenderSwapChainColorSpace VulkanSwapChain::getColorSpace() const {
+        return desc.colorSpace;
+    }
+
+    void VulkanSwapChain::applyHdrMetadata() {
+        if (!hdrMetadataSet || (vk == VK_NULL_HANDLE) || !commandQueue->device->hdrMetadataSupported) {
+            return;
+        }
+
+        // CHECK: vkSetHdrMetadataEXT is the pointer volkLoadInstance gives (the loader's trampoline); it is only
+        // called when the device enabled VK_EXT_hdr_metadata.
+        // BT.2020 primaries and the D65 white point.
+        VkHdrMetadataEXT metadata = {};
+        metadata.sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT;
+        metadata.displayPrimaryRed = { 0.708f, 0.292f };
+        metadata.displayPrimaryGreen = { 0.170f, 0.797f };
+        metadata.displayPrimaryBlue = { 0.131f, 0.046f };
+        metadata.whitePoint = { 0.3127f, 0.3290f };
+        metadata.maxLuminance = hdrMetadata.maxMasteringLuminance;
+        metadata.minLuminance = hdrMetadata.minMasteringLuminance;
+        metadata.maxContentLightLevel = hdrMetadata.maxContentLightLevel;
+        metadata.maxFrameAverageLightLevel = hdrMetadata.maxFrameAverageLightLevel;
+        vkSetHdrMetadataEXT(commandQueue->device->vk, 1, &vk, &metadata);
+    }
+
+    bool VulkanSwapChain::setHdrMetadata(const RenderHdrMetadata &metadata) {
+        if ((desc.colorSpace != RenderSwapChainColorSpace::HDR10_ST2084) || !commandQueue->device->hdrMetadataSupported) {
+            return false;
+        }
+
+        hdrMetadata = metadata;
+        hdrMetadataSet = true;
+        applyHdrMetadata();
+        return true;
     }
 
     void VulkanSwapChain::getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const {
@@ -3715,7 +3777,14 @@ namespace plume {
     }
 
     std::unique_ptr<RenderSwapChain> VulkanCommandQueue::createSwapChain(const RenderSwapChainDesc &desc) {
-        return std::make_unique<VulkanSwapChain>(this, desc);
+        std::unique_ptr<VulkanSwapChain> swapChain = std::make_unique<VulkanSwapChain>(this, desc);
+
+        // A swap chain asked for a colour space the surface does not list is not usable as one.
+        if (swapChain->colorSpaceUnavailable && (desc.colorSpace != RenderSwapChainColorSpace::SRGB_NONLINEAR)) {
+            return nullptr;
+        }
+
+        return swapChain;
     }
 
     void VulkanCommandQueue::executeCommandLists(const RenderCommandList **commandLists, uint32_t commandListCount, RenderCommandSemaphore **waitSemaphores, uint32_t waitSemaphoreCount, RenderCommandSemaphore **signalSemaphores, uint32_t signalSemaphoreCount, RenderCommandFence *signalFence) {
@@ -4391,6 +4460,7 @@ namespace plume {
 
         // Fill Vulkan-only capabilities.
         loadStoreOpNoneSupported = supportedOptionalExtensions.find(VK_EXT_LOAD_STORE_OP_NONE_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        hdrMetadataSupported = supportedOptionalExtensions.find(VK_EXT_HDR_METADATA_EXTENSION_NAME) != supportedOptionalExtensions.end();
 
         if (!nullDescriptorSupported) {
             nullBuffer = createBuffer(RenderBufferDesc::DefaultBuffer(16, RenderBufferFlag::VERTEX));

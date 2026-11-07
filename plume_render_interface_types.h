@@ -163,6 +163,7 @@ namespace plume {
         R11G11B10_FLOAT,
         D24_UNORM_S8_UINT,
         B5G5R5A1_UNORM,
+        R10G10B10A2_UNORM,
         MAX
     };
 
@@ -573,6 +574,7 @@ namespace plume {
         case RenderFormat::R32_UINT:
         case RenderFormat::R32_SINT:
         case RenderFormat::R11G11B10_FLOAT:
+        case RenderFormat::R10G10B10A2_UNORM:
         case RenderFormat::D24_UNORM_S8_UINT:
             return 4;
         case RenderFormat::R8G8_TYPELESS:
@@ -679,6 +681,7 @@ namespace plume {
         case RenderFormat::R11G11B10_FLOAT:
         case RenderFormat::D24_UNORM_S8_UINT:
         case RenderFormat::B5G5R5A1_UNORM:
+        case RenderFormat::R10G10B10A2_UNORM:
             return 1;
         case RenderFormat::BC1_TYPELESS:
         case RenderFormat::BC1_UNORM:
@@ -1189,6 +1192,25 @@ namespace plume {
         bool allowOnlyBuffers = false;
     };
 
+    // How the display reads the swap chain's values.
+    enum class RenderSwapChainColorSpace {
+        // The platform's default: sRGB-encoded values (DXGI G22 Rec.709, Vulkan SRGB_NONLINEAR).
+        SRGB_NONLINEAR,
+        // HDR10: Rec.2020 primaries, SMPTE ST 2084 (PQ) code values. Pair it with R10G10B10A2_UNORM.
+        // Only where the output can present it: createSwapChain returns null otherwise.
+        HDR10_ST2084
+    };
+
+    // What an HDR10 swap chain tells the display about its content, in nits. Rec.2020 primaries and a
+    // D65 white point are implied.
+    struct RenderHdrMetadata {
+        float maxMasteringLuminance = 1000.0f;
+        float minMasteringLuminance = 0.0f;
+        float maxContentLightLevel = 1000.0f;
+        // 0: unknown.
+        float maxFrameAverageLightLevel = 0.0f;
+    };
+
     struct RenderSwapChainDesc {
         RenderWindow renderWindow = {};
         RenderFormat format = RenderFormat::UNKNOWN;
@@ -1198,14 +1220,19 @@ namespace plume {
         bool enablePresentWait = false;
         uint32_t maxFrameLatency = 0;
 
+        // Anything but SRGB_NONLINEAR makes RenderCommandQueue::createSwapChain return null when the
+        // output cannot present it (the reason goes to stderr).
+        RenderSwapChainColorSpace colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR;
+
         RenderSwapChainDesc() = default;
 
-        RenderSwapChainDesc(RenderWindow renderWindow, RenderFormat format, uint32_t textureCount, bool enablePresentWait = false, uint32_t maxFrameLatency = 0) {
+        RenderSwapChainDesc(RenderWindow renderWindow, RenderFormat format, uint32_t textureCount, bool enablePresentWait = false, uint32_t maxFrameLatency = 0, RenderSwapChainColorSpace colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR) {
             this->renderWindow = renderWindow;
             this->format = format;
             this->textureCount = textureCount;
             this->enablePresentWait = enablePresentWait;
             this->maxFrameLatency = maxFrameLatency;
+            this->colorSpace = colorSpace;
         }
     };
 

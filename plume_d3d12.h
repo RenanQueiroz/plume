@@ -121,6 +121,8 @@ namespace plume {
         uint32_t refreshRate = 0;
         bool vsyncEnabled = true;
         UINT swapChainFlags = 0;
+        bool hdrMetadataSet = false;
+        RenderHdrMetadata hdrMetadata;
 
         D3D12SwapChain(D3D12CommandQueue *commandQueue, const RenderSwapChainDesc &desc);
         ~D3D12SwapChain() override;
@@ -138,8 +140,13 @@ namespace plume {
         RenderWindow getWindow() const override;
         bool isEmpty() const override;
         uint32_t getRefreshRate() const override;
+        RenderSwapChainColorSpace getColorSpace() const override;
+        bool setHdrMetadata(const RenderHdrMetadata &metadata) override;
         void getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const;
         void setTextures();
+        // HDR10 only: DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, if the output can present it.
+        bool applyColorSpace();
+        void applyHdrMetadata();
     };
 
     struct D3D12Framebuffer : RenderFramebuffer {
