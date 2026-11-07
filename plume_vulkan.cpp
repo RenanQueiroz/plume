@@ -93,6 +93,10 @@ namespace plume {
         VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME,
         VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
         VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,
+        // Derivatives in compute shaders (the FidelityFX shaders declare SPV_KHR_compute_shader_derivatives): the KHR extension, or its
+        // NVIDIA predecessor where a driver only has that one. Dropped again below when the device lacks the features.
+        VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
+        VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
         VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
@@ -4205,6 +4209,16 @@ namespace plume {
             featuresChain = &subgroupSizeControlFeatures;
         }
 
+        // The two derivatives extensions share one feature structure (the NV type is an alias of the KHR one).
+        VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR computeDerivativesFeatures = {};
+        const bool computeDerivativesKhrFound = supportedOptionalExtensions.find(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        const bool computeDerivativesFound = computeDerivativesKhrFound || supportedOptionalExtensions.find(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        if (computeDerivativesFound) {
+            computeDerivativesFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR;
+            computeDerivativesFeatures.pNext = featuresChain;
+            featuresChain = &computeDerivativesFeatures;
+        }
+
         VkPhysicalDeviceFeatures2 deviceFeatures = {};
         deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         deviceFeatures.pNext = featuresChain;
@@ -4339,6 +4353,23 @@ namespace plume {
         }
         else {
             supportedOptionalExtensions.erase(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+        }
+
+        // Shaders that declare the derivative group capabilities need the extension and the feature of the mode they use enabled: both modes
+        // go on where the device reports them. One extension is enough, the NV one only where the device has no KHR one.
+        const bool computeDerivativesSupported = computeDerivativesFound &&
+            (computeDerivativesFeatures.computeDerivativeGroupLinear || computeDerivativesFeatures.computeDerivativeGroupQuads);
+        if (computeDerivativesSupported) {
+            computeDerivativesFeatures.pNext = createDeviceChain;
+            createDeviceChain = &computeDerivativesFeatures;
+
+            if (computeDerivativesKhrFound) {
+                supportedOptionalExtensions.erase(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
+            }
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
+            supportedOptionalExtensions.erase(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
         }
 
         // Retrieve the information for the queue families.
