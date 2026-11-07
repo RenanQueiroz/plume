@@ -103,6 +103,9 @@ namespace plume {
         // (VkPhysicalDeviceMemoryBudgetPropertiesEXT), to free memory before
         // allocations start failing.
         VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+        // Latency reducers (NVIDIA Reflex, AMD Anti-Lag 2): each is dropped again below when the device lacks its features.
+        VK_NV_LOW_LATENCY_2_EXTENSION_NAME,
+        VK_AMD_ANTI_LAG_EXTENSION_NAME,
         VK_KHR_PRESENT_ID_EXTENSION_NAME,
         VK_KHR_PRESENT_WAIT_EXTENSION_NAME,
         VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME,
@@ -2337,12 +2340,22 @@ namespace plume {
         presentInfo.waitSemaphoreCount = uint32_t(waitSemaphoresVector.size());
 
         VkPresentIdKHR presentId = {};
+        // The id of the frame this present ends, for the latency reducer (0: none), used once.
+        uint64_t latencyId = latencyPresentId;
+        latencyPresentId = 0;
         if (desc.enablePresentWait) {
             assert(commandQueue->device->capabilities.presentWait && "Present wait must be supported by the RenderDevice.");
 
             currentPresentId++;
             presentId.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
             presentId.pPresentIds = &currentPresentId;
+            presentId.swapchainCount = 1;
+            presentInfo.pNext = &presentId;
+        }
+        else if ((latencyId != 0) && latencyMode) {
+            // The device enabled the presentId feature together with VK_NV_low_latency2.
+            presentId.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
+            presentId.pPresentIds = &latencyId;
             presentId.swapchainCount = 1;
             presentInfo.pNext = &presentId;
         }
@@ -2411,9 +2424,30 @@ namespace plume {
         createInfo.compositeAlpha = pickedAlphaFlag;
         createInfo.presentMode = requiredPresentMode;
         createInfo.clipped = VK_TRUE;
-        createInfo.oldSwapchain = vk;
+
+        // A recreate passes the live swap chain as oldSwapchain. It is kept here: the retry below can't pass it again, and it is
+        // destroyed from here once the new one exists.
+        const VkSwapchainKHR oldSwapchain = vk;
+        createInfo.oldSwapchain = oldSwapchain;
+
+        // VK_NV_low_latency2: the swap chain is made in the latency mode, which is what lets a sleep mode be set on it (the mode stays off
+        // until vkSetLatencySleepModeNV turns it on). A driver that refuses it is asked again without it; latencyMode says which was made.
+        VkSwapchainLatencyCreateInfoNV latencyCreateInfo = {};
+        latencyCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV;
+        latencyCreateInfo.latencyModeEnable = VK_TRUE;
+        createInfo.pNext = commandQueue->device->nvLowLatency ? &latencyCreateInfo : nullptr;
 
         VkResult res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &vk);
+        if ((res != VK_SUCCESS) && (createInfo.pNext != nullptr)) {
+            // The failed call already retired oldSwapchain (a failed call retires it too), and a retired swap chain can't be passed
+            // again. It no longer holds the surface, so the retry goes without it.
+            createInfo.pNext = nullptr;
+            createInfo.oldSwapchain = VK_NULL_HANDLE;
+            res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &vk);
+        }
+
+        latencyMode = (res == VK_SUCCESS) && (createInfo.pNext != nullptr);
+        createInfo.pNext = nullptr;
         if (res != VK_SUCCESS) {
             fprintf(stderr, "vkCreateSwapchainKHR failed with error code 0x%X.\n", res);
             return false;
@@ -2425,8 +2459,8 @@ namespace plume {
         // Reset present counter.
         presentCount = 1;
 
-        if (createInfo.oldSwapchain != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(commandQueue->device->vk, createInfo.oldSwapchain, nullptr);
+        if (oldSwapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(commandQueue->device->vk, oldSwapchain, nullptr);
         }
 
         uint32_t retrievedImageCount = 0;
@@ -4082,6 +4116,31 @@ namespace plume {
             featuresChain = &presentWaitFeatures;
         }
 
+        // VK_NV_low_latency2 (NVIDIA Reflex) needs VK_KHR_present_id with its feature even where present wait is not offered, and timeline
+        // semaphores (core in the Vulkan 1.2 the instance asks for); VK_AMD_anti_lag (AMD Anti-Lag 2) has one feature.
+        const bool nvLowLatencyFound = supportedOptionalExtensions.find(VK_NV_LOW_LATENCY_2_EXTENSION_NAME) != supportedOptionalExtensions.end() &&
+            supportedOptionalExtensions.find(VK_KHR_PRESENT_ID_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        VkPhysicalDeviceTimelineSemaphoreFeatures timelineFeatures = {};
+        if (nvLowLatencyFound) {
+            if (!presentWaitFound) {
+                presentIdFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR;
+                presentIdFeatures.pNext = featuresChain;
+                featuresChain = &presentIdFeatures;
+            }
+
+            timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+            timelineFeatures.pNext = featuresChain;
+            featuresChain = &timelineFeatures;
+        }
+
+        VkPhysicalDeviceAntiLagFeaturesAMD antiLagFeatures = {};
+        const bool antiLagFound = supportedOptionalExtensions.find(VK_AMD_ANTI_LAG_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        if (antiLagFound) {
+            antiLagFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD;
+            antiLagFeatures.pNext = featuresChain;
+            featuresChain = &antiLagFeatures;
+        }
+
         VkPhysicalDeviceRobustness2FeaturesEXT robustnessFeatures = {};
         const bool robustnessFound = supportedOptionalExtensions.find(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) != supportedOptionalExtensions.end();
         if (robustnessFound) {
@@ -4211,6 +4270,30 @@ namespace plume {
 
             presentWaitFeatures.pNext = createDeviceChain;
             createDeviceChain = &presentWaitFeatures;
+        }
+
+        // The reducers' features, and with them their extensions: one whose features the device lacks is not enabled.
+        nvLowLatency = nvLowLatencyFound && presentIdFeatures.presentId && timelineFeatures.timelineSemaphore;
+        if (nvLowLatency) {
+            if (!presentWaitSupported) {
+                presentIdFeatures.pNext = createDeviceChain;
+                createDeviceChain = &presentIdFeatures;
+            }
+
+            timelineFeatures.pNext = createDeviceChain;
+            createDeviceChain = &timelineFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
+        }
+
+        amdAntiLag = antiLagFound && antiLagFeatures.antiLag;
+        if (amdAntiLag) {
+            antiLagFeatures.pNext = createDeviceChain;
+            createDeviceChain = &antiLagFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_AMD_ANTI_LAG_EXTENSION_NAME);
         }
 
         nullDescriptorSupported = robustnessFeatures.nullDescriptor;
