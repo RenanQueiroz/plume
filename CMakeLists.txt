@@ -90,6 +90,11 @@ if(WIN32)
     target_include_directories(plume PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/contrib/D3D12MemoryAllocator/include
     )
+    if(MINGW AND NOT PLUME_D3D12_AGILITY_SDK_ENABLED)
+        # D3D12MemoryAllocator includes <dxguids.h> when the compiler is not MSVC. mingw-w64's own
+        # headers already declare the GUIDs, so an empty one stands in (compat/mingw/dxguids.h).
+        target_include_directories(plume PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat/mingw)
+    endif()
 endif()
 
 if(PLUME_SDL_VULKAN_ENABLED)

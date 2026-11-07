@@ -23,7 +23,9 @@
 // Agility SDK headers and by the Windows SDK from 10.0.26100 on. Whether a device has it is up to the
 // runtime the application loads (an Agility SDK runtime, or the system's) and the driver: the
 // capability check below asks, and a device without it keeps the static depth bias.
-#if defined(PLUME_D3D12_AGILITY_SDK_ENABLED) ||     (defined(NTDDI_WIN11_GE) && defined(WDK_NTDDI_VERSION) && (WDK_NTDDI_VERSION >= NTDDI_WIN11_GE))
+// The headers are asked rather than the SDK version: mingw-w64 reports the newest NTDDI_VERSION
+// (WDK_NTDDI_VERSION) with a d3d12.h that has none of these declarations.
+#if defined(PLUME_D3D12_AGILITY_SDK_ENABLED) || defined(__ID3D12GraphicsCommandList9_INTERFACE_DEFINED__)
 #   define PLUME_D3D12_DYNAMIC_DEPTH_BIAS 1
 #endif
 
