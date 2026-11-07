@@ -432,6 +432,9 @@ namespace plume {
         std::unique_ptr<RenderBuffer> nullBuffer;
         bool loadStoreOpNoneSupported = false;
         bool hdrMetadataSupported = false;
+        // VK_EXT_memory_budget is enabled: VkPhysicalDeviceMemoryBudgetPropertiesEXT
+        // can be chained into vkGetPhysicalDeviceMemoryProperties2.
+        bool memoryBudgetSupported = false;
         bool nullDescriptorSupported = false;
 
         VulkanDevice(VulkanInterface *renderInterface, const std::string &preferredDeviceName);

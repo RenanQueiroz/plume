@@ -99,6 +99,10 @@ namespace plume {
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
         VK_EXT_SAMPLE_LOCATIONS_EXTENSION_NAME,
         VK_EXT_LOAD_STORE_OP_NONE_EXTENSION_NAME,
+        // Lets the application read how much of each memory heap it may use
+        // (VkPhysicalDeviceMemoryBudgetPropertiesEXT), to free memory before
+        // allocations start failing.
+        VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
         VK_KHR_PRESENT_ID_EXTENSION_NAME,
         VK_KHR_PRESENT_WAIT_EXTENSION_NAME,
         VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME,
@@ -4461,6 +4465,7 @@ namespace plume {
         // Fill Vulkan-only capabilities.
         loadStoreOpNoneSupported = supportedOptionalExtensions.find(VK_EXT_LOAD_STORE_OP_NONE_EXTENSION_NAME) != supportedOptionalExtensions.end();
         hdrMetadataSupported = supportedOptionalExtensions.find(VK_EXT_HDR_METADATA_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        memoryBudgetSupported = supportedOptionalExtensions.find(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) != supportedOptionalExtensions.end();
 
         if (!nullDescriptorSupported) {
             nullBuffer = createBuffer(RenderBufferDesc::DefaultBuffer(16, RenderBufferFlag::VERTEX));
