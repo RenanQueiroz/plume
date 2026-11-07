@@ -3883,6 +3883,47 @@ namespace plume {
                 uma = architecture1.UMA;
             }
 
+            // Compute effects (temporal upscalers, frame generation): 16-bit shader ops, wave sizes, typed UAV loads
+            // and the highest shader model the runtime knows. A runtime that does not know a shader model answers
+            // E_INVALIDARG for it, so the highest known one is searched downwards; the call then reports the highest
+            // the driver offers that is not above the one asked for.
+            bool native16BitOption = false;
+            D3D12_FEATURE_DATA_D3D12_OPTIONS4 d3d12Options4 = {};
+            res = deviceOption->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS4, &d3d12Options4, sizeof(d3d12Options4));
+            if (SUCCEEDED(res)) {
+                native16BitOption = d3d12Options4.Native16BitShaderOpsSupported;
+            }
+
+            uint32_t waveLaneCountMinOption = 0;
+            uint32_t waveLaneCountMaxOption = 0;
+            D3D12_FEATURE_DATA_D3D12_OPTIONS1 d3d12Options1 = {};
+            res = deviceOption->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &d3d12Options1, sizeof(d3d12Options1));
+            if (SUCCEEDED(res) && d3d12Options1.WaveOps) {
+                waveLaneCountMinOption = d3d12Options1.WaveLaneCountMin;
+                waveLaneCountMaxOption = d3d12Options1.WaveLaneCountMax;
+            }
+
+            bool typedUavLoadOption = false;
+            D3D12_FEATURE_DATA_D3D12_OPTIONS d3d12Options = {};
+            res = deviceOption->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &d3d12Options, sizeof(d3d12Options));
+            if (SUCCEEDED(res) && d3d12Options.TypedUAVLoadAdditionalFormats) {
+                D3D12_FEATURE_DATA_FORMAT_SUPPORT rgba16UnormSupport = {};
+                rgba16UnormSupport.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
+                res = deviceOption->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &rgba16UnormSupport, sizeof(rgba16UnormSupport));
+                typedUavLoadOption = SUCCEEDED(res) && ((rgba16UnormSupport.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0);
+            }
+
+            uint32_t highestShaderModelOption = 0;
+            for (uint32_t candidate = 0x69; candidate >= 0x60; candidate--) {
+                D3D12_FEATURE_DATA_SHADER_MODEL highestShaderModel = {};
+                highestShaderModel.HighestShaderModel = D3D_SHADER_MODEL(candidate);
+                res = deviceOption->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &highestShaderModel, sizeof(highestShaderModel));
+                if (SUCCEEDED(res)) {
+                    highestShaderModelOption = uint32_t(highestShaderModel.HighestShaderModel);
+                    break;
+                }
+            }
+
             // Pick this adapter and device if it has better feature support than the current one.
             std::string deviceName = Utf16ToUtf8(adapterDesc.Description);
             bool preferOverNothing = (adapter == nullptr) || (d3d == nullptr);
@@ -3912,6 +3953,19 @@ namespace plume {
                 capabilities.occlusionQueries = true;
                 capabilities.debugLabels = true;
                 capabilities.uma = uma;
+                capabilities.native16BitShaderOps = native16BitOption;
+                capabilities.shaderModel = highestShaderModelOption;
+                capabilities.minSubgroupSize = 0;
+                capabilities.maxSubgroupSize = 0;
+                capabilities.subgroupSizeControl = false;
+                if ((highestShaderModelOption >= 0x66) && (waveLaneCountMaxOption != 0)) {
+                    // The WaveSize attribute of shader model 6.6, within the range the device reports.
+                    capabilities.subgroupSizeControl = true;
+                    capabilities.minSubgroupSize = waveLaneCountMinOption;
+                    capabilities.maxSubgroupSize = waveLaneCountMaxOption;
+                }
+
+                capabilities.typedUnorderedAccessLoad = typedUavLoadOption;
 
                 // Pretend GPU Upload heaps are supported if UMA is supported, as
                 // the backend has a workaround using a custom pool for it.

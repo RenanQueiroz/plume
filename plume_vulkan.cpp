@@ -86,6 +86,11 @@ namespace plume {
         VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
         VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME,
+        // Compute effects (temporal upscalers, frame generation): 16-bit shader math and storage, and pipelines that
+        // ask for a subgroup size. Each is dropped again below when the device lacks its features.
+        VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME,
+        VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
+        VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
         VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
@@ -1027,6 +1032,8 @@ namespace plume {
         }
 
         imageFormat = imageInfo.format;
+        imageUsage = imageInfo.usage;
+        imageFlags = imageInfo.flags;
         fillSubresourceRange();
 
         VmaAllocationCreateInfo createInfo = {};
@@ -4039,6 +4046,33 @@ namespace plume {
             featuresChain = &accelerationStructureFeatures;
         }
 
+        // Compute effects (temporal upscalers, frame generation). The FidelityFX runtime reads what the physical device
+        // supports, not what the device was created with, and picks its 16-bit shaders and its required subgroup sizes
+        // from that: a device that supports them has to be created with them.
+        VkPhysicalDeviceShaderFloat16Int8Features float16Int8Features = {};
+        const bool float16Int8Found = supportedOptionalExtensions.find(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        if (float16Int8Found) {
+            float16Int8Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+            float16Int8Features.pNext = featuresChain;
+            featuresChain = &float16Int8Features;
+        }
+
+        VkPhysicalDevice16BitStorageFeatures storage16BitFeatures = {};
+        const bool storage16BitFound = supportedOptionalExtensions.find(VK_KHR_16BIT_STORAGE_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        if (storage16BitFound) {
+            storage16BitFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+            storage16BitFeatures.pNext = featuresChain;
+            featuresChain = &storage16BitFeatures;
+        }
+
+        VkPhysicalDeviceSubgroupSizeControlFeatures subgroupSizeControlFeatures = {};
+        const bool subgroupSizeControlFound = supportedOptionalExtensions.find(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        if (subgroupSizeControlFound) {
+            subgroupSizeControlFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES;
+            subgroupSizeControlFeatures.pNext = featuresChain;
+            featuresChain = &subgroupSizeControlFeatures;
+        }
+
         VkPhysicalDeviceFeatures2 deviceFeatures = {};
         deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         deviceFeatures.pNext = featuresChain;
@@ -4061,6 +4095,16 @@ namespace plume {
             VkPhysicalDeviceProperties2 deviceProperties2 = {};
             deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             deviceProperties2.pNext = &sampleLocationProperties;
+            vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties2);
+        }
+
+        VkPhysicalDeviceSubgroupSizeControlProperties subgroupSizeControlProperties = {};
+        if (subgroupSizeControlFound && subgroupSizeControlFeatures.subgroupSizeControl) {
+            subgroupSizeControlProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES;
+
+            VkPhysicalDeviceProperties2 deviceProperties2 = {};
+            deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            deviceProperties2.pNext = &subgroupSizeControlProperties;
             vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties2);
         }
 
@@ -4111,6 +4155,34 @@ namespace plume {
         if (portabilityFound) {
             portabilityFeatures.pNext = createDeviceChain;
             createDeviceChain = &portabilityFeatures;
+        }
+
+        // Compute effects: a feature set the device does not have takes its extension out of the enabled ones.
+        const bool float16Supported = float16Int8Found && float16Int8Features.shaderFloat16;
+        if (float16Supported) {
+            float16Int8Features.pNext = createDeviceChain;
+            createDeviceChain = &float16Int8Features;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+        }
+
+        const bool storage16BitSupported = storage16BitFound && storage16BitFeatures.storageBuffer16BitAccess;
+        if (storage16BitSupported) {
+            storage16BitFeatures.pNext = createDeviceChain;
+            createDeviceChain = &storage16BitFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+        }
+
+        const bool subgroupSizeControlSupported = subgroupSizeControlFound && subgroupSizeControlFeatures.subgroupSizeControl;
+        if (subgroupSizeControlSupported) {
+            subgroupSizeControlFeatures.pNext = createDeviceChain;
+            createDeviceChain = &subgroupSizeControlFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
         }
 
         // Retrieve the information for the queue families.
@@ -4283,6 +4355,20 @@ namespace plume {
         capabilities.debugLabels = renderInterface->debugUtils && (vkCmdBeginDebugUtilsLabelEXT != nullptr) && (vkCmdEndDebugUtilsLabelEXT != nullptr);
         capabilities.uma = (description.type == RenderDeviceType::INTEGRATED) && hasHostVisibleDeviceLocalMemory;
         capabilities.gpuUploadHeap = capabilities.uma;
+
+        // Compute effects. The core features come from the VkPhysicalDeviceFeatures the device was created with.
+        capabilities.native16BitShaderOps = float16Supported && storage16BitSupported && deviceFeatures.features.shaderInt16;
+        capabilities.subgroupSizeControl = subgroupSizeControlSupported;
+        capabilities.minSubgroupSize = subgroupSizeControlSupported ? subgroupSizeControlProperties.minSubgroupSize : 0;
+        capabilities.maxSubgroupSize = subgroupSizeControlSupported ? subgroupSizeControlProperties.maxSubgroupSize : 0;
+
+        // Typed loads from a storage image (a UAV) of the four-channel 16-bit unorm format FidelityFX asks for.
+        {
+            VkFormatProperties rgba16UnormProperties = {};
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, VK_FORMAT_R16G16B16A16_UNORM, &rgba16UnormProperties);
+            capabilities.typedUnorderedAccessLoad = deviceFeatures.features.shaderStorageImageReadWithoutFormat &&
+                ((rgba16UnormProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0);
+        }
 
         // Ask the driver for the 24-bit depth format instead of creating an image to see: a driver without the format
         // can accept vkCreateImage for it and then draw nothing into it or read zeros from it.

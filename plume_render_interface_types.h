@@ -451,6 +451,9 @@ namespace plume {
             NONE = 0U,
             RENDER_TARGET = 1U << 0,
             DEPTH_TARGET = 1U << 1,
+            // A texture that a compute shader writes (a temporal upscaler's output, for one) needs both of the next two:
+            // STORAGE gives a Vulkan image its storage usage and is ignored elsewhere, UNORDERED_ACCESS allows unordered
+            // access on D3D12 and Metal and is ignored by Vulkan.
             STORAGE = 1U << 2,
             UNORDERED_ACCESS = 1U << 3,
             CUBE = 1U << 4
@@ -1865,6 +1868,28 @@ namespace plume {
         // D24_UNORM_S8_UINT as a depth target that can also be sampled and copied. Vulkan drivers may lack it
         // (AMD's proprietary driver lists no 24-bit depth format) and still create such an image without an error.
         bool depth24Stencil8 = true;
+
+        // Compute effects (temporal upscalers, frame generation).
+        // 16-bit floating point and integer arithmetic in shaders and 16-bit values in storage buffers, all usable
+        // (Vulkan: shaderFloat16, shaderInt16 and storageBuffer16BitAccess enabled on the device;
+        // D3D12: Native16BitShaderOpsSupported).
+        bool native16BitShaderOps = false;
+
+        // A pipeline can ask for the size of its subgroups (waves), within [minSubgroupSize, maxSubgroupSize]
+        // (Vulkan: VK_EXT_subgroup_size_control enabled on the device; D3D12: the WaveSize attribute of shader
+        // model 6.6). The sizes are 0 when it cannot.
+        bool subgroupSizeControl = false;
+        uint32_t minSubgroupSize = 0;
+        uint32_t maxSubgroupSize = 0;
+
+        // Typed loads from a storage image (UAV), including the four-channel 16-bit unorm format (Vulkan:
+        // shaderStorageImageReadWithoutFormat and storage image support for R16G16B16A16_UNORM; D3D12:
+        // TypedUAVLoadAdditionalFormats and UAV_TYPED_LOAD for R16G16B16A16_UNORM).
+        bool typedUnorderedAccessLoad = false;
+
+        // D3D12: the highest HLSL shader model the runtime and the driver offer, as a D3D_SHADER_MODEL value
+        // (0x66 is 6.6). Whether the application loads an Agility SDK runtime decides how high that is. 0 on other backends.
+        uint32_t shaderModel = 0;
     };
 
     struct RenderInterfaceCapabilities {
