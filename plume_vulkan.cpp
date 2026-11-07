@@ -2424,7 +2424,11 @@ namespace plume {
         createInfo.compositeAlpha = pickedAlphaFlag;
         createInfo.presentMode = requiredPresentMode;
         createInfo.clipped = VK_TRUE;
-        createInfo.oldSwapchain = vk;
+
+        // A recreate passes the live swap chain as oldSwapchain. It is kept here: the retry below can't pass it again, and it is
+        // destroyed from here once the new one exists.
+        const VkSwapchainKHR oldSwapchain = vk;
+        createInfo.oldSwapchain = oldSwapchain;
 
         // VK_NV_low_latency2: the swap chain is made in the latency mode, which is what lets a sleep mode be set on it (the mode stays off
         // until vkSetLatencySleepModeNV turns it on). A driver that refuses it is asked again without it; latencyMode says which was made.
@@ -2435,7 +2439,10 @@ namespace plume {
 
         VkResult res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &vk);
         if ((res != VK_SUCCESS) && (createInfo.pNext != nullptr)) {
+            // The failed call already retired oldSwapchain (a failed call retires it too), and a retired swap chain can't be passed
+            // again. It no longer holds the surface, so the retry goes without it.
             createInfo.pNext = nullptr;
+            createInfo.oldSwapchain = VK_NULL_HANDLE;
             res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &vk);
         }
 
@@ -2452,8 +2459,8 @@ namespace plume {
         // Reset present counter.
         presentCount = 1;
 
-        if (createInfo.oldSwapchain != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(commandQueue->device->vk, createInfo.oldSwapchain, nullptr);
+        if (oldSwapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(commandQueue->device->vk, oldSwapchain, nullptr);
         }
 
         uint32_t retrievedImageCount = 0;
