@@ -108,7 +108,7 @@ namespace plume {
         const VulkanTexture *texture = nullptr;
         RenderTextureViewDesc desc;
 
-        VulkanTextureView(const VulkanTexture *texture, const RenderTextureViewDesc &desc);
+        VulkanTextureView(const VulkanTexture *texture, const RenderTextureViewDesc &desc, bool depthStencilAttachment = false);
         ~VulkanTextureView() override;
     };
 
@@ -427,6 +427,7 @@ namespace plume {
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
         VkPhysicalDeviceProperties physicalDeviceProperties = {};
         VmaAllocator allocator = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache = VK_NULL_HANDLE;
         uint32_t queueFamilyIndices[3] = {};
         std::vector<VulkanQueueFamily> queueFamilies;
         RenderDeviceCapabilities capabilities;
@@ -472,6 +473,8 @@ namespace plume {
         const RenderDeviceCapabilities &getCapabilities() const override;
         const RenderDeviceDescription &getDescription() const override;
         RenderSampleCounts getSampleCountsSupported(RenderFormat format) const override;
+        bool loadPipelineCacheData(const void *data, uint64_t size) override;
+        bool getPipelineCacheData(std::vector<uint8_t> &data) override;
         void release();
         bool isValid() const;
         bool beginCapture() override;
