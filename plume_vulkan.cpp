@@ -107,6 +107,9 @@ namespace plume {
         // (VkPhysicalDeviceMemoryBudgetPropertiesEXT), to free memory before
         // allocations start failing.
         VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+        // What the driver knows about a lost device (vkGetDeviceFaultInfoEXT: a description, the faulting addresses, vendor codes),
+        // for the application's log. Dropped again below when the device lacks the feature.
+        VK_EXT_DEVICE_FAULT_EXTENSION_NAME,
         // Latency reducers (NVIDIA Reflex, AMD Anti-Lag 2): each is dropped again below when the device lacks its features.
         VK_NV_LOW_LATENCY_2_EXTENSION_NAME,
         VK_AMD_ANTI_LAG_EXTENSION_NAME,
@@ -4219,6 +4222,14 @@ namespace plume {
             featuresChain = &computeDerivativesFeatures;
         }
 
+        VkPhysicalDeviceFaultFeaturesEXT deviceFaultFeatures = {};
+        const bool deviceFaultFound = supportedOptionalExtensions.find(VK_EXT_DEVICE_FAULT_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        if (deviceFaultFound) {
+            deviceFaultFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+            deviceFaultFeatures.pNext = featuresChain;
+            featuresChain = &deviceFaultFeatures;
+        }
+
         VkPhysicalDeviceFeatures2 deviceFeatures = {};
         deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         deviceFeatures.pNext = featuresChain;
@@ -4370,6 +4381,17 @@ namespace plume {
         else {
             supportedOptionalExtensions.erase(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
             supportedOptionalExtensions.erase(VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
+        }
+
+        // Only the basic fault report is switched on: the vendor crash dump (deviceFaultVendorBinary) can cost the driver work at
+        // every submission, and nothing here reads it.
+        if (deviceFaultFound && deviceFaultFeatures.deviceFault) {
+            deviceFaultFeatures.deviceFaultVendorBinary = VK_FALSE;
+            deviceFaultFeatures.pNext = createDeviceChain;
+            createDeviceChain = &deviceFaultFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
         }
 
         // Retrieve the information for the queue families.
@@ -4580,6 +4602,7 @@ namespace plume {
         loadStoreOpNoneSupported = supportedOptionalExtensions.find(VK_EXT_LOAD_STORE_OP_NONE_EXTENSION_NAME) != supportedOptionalExtensions.end();
         hdrMetadataSupported = supportedOptionalExtensions.find(VK_EXT_HDR_METADATA_EXTENSION_NAME) != supportedOptionalExtensions.end();
         memoryBudgetSupported = supportedOptionalExtensions.find(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        deviceFaultSupported = supportedOptionalExtensions.find(VK_EXT_DEVICE_FAULT_EXTENSION_NAME) != supportedOptionalExtensions.end();
 
         if (!nullDescriptorSupported) {
             nullBuffer = createBuffer(RenderBufferDesc::DefaultBuffer(16, RenderBufferFlag::VERTEX));

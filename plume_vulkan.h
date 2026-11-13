@@ -439,6 +439,9 @@ namespace plume {
         // VK_EXT_memory_budget is enabled: VkPhysicalDeviceMemoryBudgetPropertiesEXT
         // can be chained into vkGetPhysicalDeviceMemoryProperties2.
         bool memoryBudgetSupported = false;
+        // VK_EXT_device_fault is enabled with its deviceFault feature: vkGetDeviceFaultInfoEXT (through vkGetDeviceProcAddr) can be
+        // called once a command has returned VK_ERROR_DEVICE_LOST.
+        bool deviceFaultSupported = false;
         bool nullDescriptorSupported = false;
         // The device enabled VK_NV_low_latency2 (with the presentId and timeline semaphore features) / VK_AMD_anti_lag.
         bool nvLowLatency = false;
