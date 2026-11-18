@@ -1847,6 +1847,11 @@ namespace plume {
         bool raytracing = false;
         bool raytracingStateUpdate = false;
 
+        // Ray queries (inline ray tracing) from any shader stage that can use them, such as a compute shader, against an
+        // acceleration structure bound as a descriptor. Does not need the raytracing pipelines (Vulkan: VK_KHR_ray_query and its
+        // feature enabled together with the acceleration structure ones; D3D12: raytracing tier 1.1 and shader model 6.5).
+        bool rayQuery = false;
+
         // MSAA.
         bool sampleLocations = false;
 

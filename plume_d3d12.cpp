@@ -4054,6 +4054,7 @@ namespace plume {
                 capabilities.geometryShader = true;
                 capabilities.raytracing = rtSupportOption;
                 capabilities.raytracingStateUpdate = rtStateUpdateSupportOption;
+                capabilities.rayQuery = rtStateUpdateSupportOption && (highestShaderModelOption >= 0x65);
                 capabilities.sampleLocations = samplePositionsOption;
                 capabilities.resolveRegion = resolveRegionOption;
                 capabilities.resolveModes = samplePositionsOption; // Resolve modes require sample positions support.
