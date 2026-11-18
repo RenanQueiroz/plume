@@ -99,6 +99,9 @@ namespace plume {
         VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        // Ray queries (inline ray tracing from compute and other shaders). Work with the acceleration structure extension alone,
+        // some drivers have no ray tracing pipelines. Dropped again below when the device lacks the feature.
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
         VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
         VK_EXT_SAMPLE_LOCATIONS_EXTENSION_NAME,
@@ -4169,14 +4172,26 @@ namespace plume {
             featuresChain = &portabilityFeatures;
         }
 
+        // Ray tracing pipelines and ray queries both build on the acceleration structure extension, but not on each other.
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures = {};
+        VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures = {};
         VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures = {};
-        const bool rayTracingFound = (supportedOptionalExtensions.find(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) != supportedOptionalExtensions.end()) && (supportedOptionalExtensions.find(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) != supportedOptionalExtensions.end());
+        const bool accelerationStructureFound = supportedOptionalExtensions.find(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        const bool rayTracingFound = accelerationStructureFound && (supportedOptionalExtensions.find(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) != supportedOptionalExtensions.end());
+        const bool rayQueryFound = accelerationStructureFound && (supportedOptionalExtensions.find(VK_KHR_RAY_QUERY_EXTENSION_NAME) != supportedOptionalExtensions.end());
         if (rayTracingFound) {
             rayTracingPipelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
             rayTracingPipelineFeatures.pNext = featuresChain;
             featuresChain = &rayTracingPipelineFeatures;
+        }
 
+        if (rayQueryFound) {
+            rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+            rayQueryFeatures.pNext = featuresChain;
+            featuresChain = &rayQueryFeatures;
+        }
+
+        if (accelerationStructureFound) {
             accelerationStructureFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
             accelerationStructureFeatures.pNext = featuresChain;
             featuresChain = &accelerationStructureFeatures;
@@ -4256,11 +4271,23 @@ namespace plume {
 
         // Build the device creation chain.
         void *createDeviceChain = nullptr;
-        const bool rayTracingSupported = rayTracingPipelineFeatures.rayTracingPipeline && accelerationStructureFeatures.accelerationStructure;
+        const bool rayTracingSupported = rayTracingFound && rayTracingPipelineFeatures.rayTracingPipeline && accelerationStructureFeatures.accelerationStructure;
         if (rayTracingSupported) {
             rayTracingPipelineFeatures.pNext = createDeviceChain;
             createDeviceChain = &rayTracingPipelineFeatures;
+        }
 
+        const bool rayQuerySupported = rayQueryFound && rayQueryFeatures.rayQuery && accelerationStructureFeatures.accelerationStructure;
+        if (rayQuerySupported) {
+            rayQueryFeatures.pNext = createDeviceChain;
+            createDeviceChain = &rayQueryFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        }
+
+        // The acceleration structure features go on when either of the two needs them.
+        if (rayTracingSupported || rayQuerySupported) {
             accelerationStructureFeatures.pNext = createDeviceChain;
             createDeviceChain = &accelerationStructureFeatures;
         }
@@ -4525,6 +4552,7 @@ namespace plume {
         capabilities.geometryShader = deviceFeatures.features.geometryShader;
         capabilities.raytracing = rayTracingSupported;
         capabilities.raytracingStateUpdate = false;
+        capabilities.rayQuery = rayQuerySupported;
         capabilities.sampleLocations = (sampleLocationProperties.sampleLocationSampleCounts != 0);
         capabilities.resolveRegion = true;
         capabilities.resolveModes = false;
