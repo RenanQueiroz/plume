@@ -3619,14 +3619,9 @@ namespace plume {
         buildGeometryInfo.pGeometries = reinterpret_cast<const VkAccelerationStructureGeometryKHR *>(buildInfo.buildData.data());
         buildGeometryInfo.geometryCount = buildInfo.meshCount;
 
-        VkAccelerationStructureBuildRangeInfoKHR buildRangeInfo = {};
-        buildRangeInfo.primitiveCount = buildInfo.primitiveCount;
-        buildRangeInfo.primitiveOffset = 0;
-        buildRangeInfo.firstVertex = 0;
-        buildRangeInfo.transformOffset = 0;
-
-        VkAccelerationStructureBuildRangeInfoKHR *buildRangeInfoPtr = &buildRangeInfo;
-        vkCmdBuildAccelerationStructuresKHR(vk, 1, &buildGeometryInfo, &buildRangeInfoPtr);
+        // One range per geometry, stored after the geometries by setBottomLevelASBuildInfo.
+        const VkAccelerationStructureBuildRangeInfoKHR *buildRangeInfos = reinterpret_cast<const VkAccelerationStructureBuildRangeInfoKHR *>(buildGeometryInfo.pGeometries + buildInfo.meshCount);
+        vkCmdBuildAccelerationStructuresKHR(vk, 1, &buildGeometryInfo, &buildRangeInfos);
     }
 
     void VulkanCommandList::buildTopLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, RenderBufferReference instancesBuffer, const RenderTopLevelASBuildInfo &buildInfo) {
@@ -4714,8 +4709,10 @@ namespace plume {
         thread_local std::vector<uint32_t> geometryPrimitiveCounts;
         geometryPrimitiveCounts.resize(meshCount);
 
-        buildInfo.buildData.resize(sizeof(VkAccelerationStructureGeometryKHR) * meshCount);
+        // The geometries, followed by the range of each one for the build.
+        buildInfo.buildData.resize((sizeof(VkAccelerationStructureGeometryKHR) + sizeof(VkAccelerationStructureBuildRangeInfoKHR)) * meshCount);
         VkAccelerationStructureGeometryKHR *geometries = reinterpret_cast<VkAccelerationStructureGeometryKHR *>(buildInfo.buildData.data());
+        VkAccelerationStructureBuildRangeInfoKHR *buildRangeInfos = reinterpret_cast<VkAccelerationStructureBuildRangeInfoKHR *>(geometries + meshCount);
         for (uint32_t i = 0; i < meshCount; i++) {
             const RenderBottomLevelASMesh &mesh = meshes[i];
             VkAccelerationStructureGeometryKHR &geometry = geometries[i];
@@ -4758,6 +4755,8 @@ namespace plume {
                 geometryPrimitiveCounts[i] = mesh.vertexCount / 3;
             }
 
+            buildRangeInfos[i] = {};
+            buildRangeInfos[i].primitiveCount = geometryPrimitiveCounts[i];
             primitiveCount += geometryPrimitiveCounts[i];
         }
 
