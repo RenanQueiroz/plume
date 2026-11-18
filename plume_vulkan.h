@@ -432,6 +432,7 @@ namespace plume {
         RenderDeviceCapabilities capabilities;
         RenderDeviceDescription description;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties = {};
+        VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationStructureProperties = {};
         VkPhysicalDeviceSampleLocationsPropertiesEXT sampleLocationProperties = {};
         std::unique_ptr<RenderBuffer> nullBuffer;
         bool loadStoreOpNoneSupported = false;

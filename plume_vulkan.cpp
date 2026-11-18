@@ -938,6 +938,11 @@ namespace plume {
             minAlignment = device->rtPipelineProperties.shaderGroupBaseAlignment;
         }
 
+        // The scratch address of an acceleration structure build has one too (the offset of a build inside the buffer must keep it).
+        if (desc.flags & RenderBufferFlag::ACCELERATION_STRUCTURE_SCRATCH) {
+            minAlignment = std::max<VkDeviceSize>(minAlignment, device->accelerationStructureProperties.minAccelerationStructureScratchOffsetAlignment);
+        }
+
         VkResult res;
         if (minAlignment > 0) {
             res = vmaCreateBufferWithAlignment(device->allocator, &bufferInfo, &createInfo, minAlignment, &vk, &allocation, &allocationInfo);
@@ -4256,6 +4261,15 @@ namespace plume {
             VkPhysicalDeviceProperties2 deviceProperties2 = {};
             deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             deviceProperties2.pNext = &rtPipelineProperties;
+            vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties2);
+        }
+
+        if (accelerationStructureFound) {
+            accelerationStructureProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+
+            VkPhysicalDeviceProperties2 deviceProperties2 = {};
+            deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            deviceProperties2.pNext = &accelerationStructureProperties;
             vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties2);
         }
 
