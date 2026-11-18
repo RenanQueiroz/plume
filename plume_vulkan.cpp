@@ -656,7 +656,7 @@ namespace plume {
         }
     }
     
-    static VkPipelineStageFlags toStageFlags(RenderBarrierStages stages, bool geometrySupported, bool rtSupported) {
+    static VkPipelineStageFlags toStageFlags(RenderBarrierStages stages, bool geometrySupported, bool accelerationStructureSupported, bool rtPipelineSupported) {
         VkPipelineStageFlags flags = 0;
 
         if (stages & RenderBarrierStage::GRAPHICS) {
@@ -676,8 +676,11 @@ namespace plume {
         if (stages & RenderBarrierStage::COMPUTE) {
             flags |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
-            if (rtSupported) {
+            if (accelerationStructureSupported) {
                 flags |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            }
+
+            if (rtPipelineSupported) {
                 flags |= VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
             }
         }
@@ -2998,8 +3001,9 @@ namespace plume {
 
         const bool geometryEnabled = queue->device->capabilities.geometryShader;
         const bool rtEnabled = queue->device->capabilities.raytracing;
+        const bool accelerationStructureEnabled = rtEnabled || queue->device->capabilities.rayQuery;
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | toStageFlags(stages, geometryEnabled, rtEnabled);
+        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | toStageFlags(stages, geometryEnabled, accelerationStructureEnabled, rtEnabled);
         thread_local std::vector<VkBufferMemoryBarrier> bufferMemoryBarriers;
         thread_local std::vector<VkImageMemoryBarrier> imageMemoryBarriers;
         bufferMemoryBarriers.clear();
@@ -3018,7 +3022,13 @@ namespace plume {
             bufferMemoryBarrier.offset = 0;
             bufferMemoryBarrier.size = interfaceBuffer->desc.size;
             bufferMemoryBarriers.emplace_back(bufferMemoryBarrier);
-            srcStageMask |= toStageFlags(interfaceBuffer->barrierStages, geometryEnabled, rtEnabled);
+            srcStageMask |= toStageFlags(interfaceBuffer->barrierStages, geometryEnabled, accelerationStructureEnabled, rtEnabled);
+
+            // The builds write these buffers from the build stage, whatever stages the buffer was last barriered for.
+            if (accelerationStructureEnabled && (interfaceBuffer->desc.flags & (RenderBufferFlag::ACCELERATION_STRUCTURE | RenderBufferFlag::ACCELERATION_STRUCTURE_SCRATCH))) {
+                srcStageMask |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            }
+
             interfaceBuffer->barrierStages = stages;
         }
 
@@ -3038,7 +3048,7 @@ namespace plume {
             imageMemoryBarrier.subresourceRange.layerCount = interfaceTexture->desc.arraySize;
             imageMemoryBarrier.subresourceRange.aspectMask = toAspectFlags(interfaceTexture->desc.format, interfaceTexture->desc.flags);
             imageMemoryBarriers.emplace_back(imageMemoryBarrier);
-            srcStageMask |= toStageFlags(interfaceTexture->barrierStages, geometryEnabled, rtEnabled);
+            srcStageMask |= toStageFlags(interfaceTexture->barrierStages, geometryEnabled, accelerationStructureEnabled, rtEnabled);
             interfaceTexture->textureLayout = textureBarrier.layout;
             interfaceTexture->barrierStages = stages;
         }
