@@ -3596,6 +3596,9 @@ namespace plume {
     }
     
     void VulkanCommandList::buildBottomLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, const RenderBottomLevelASBuildInfo &buildInfo) {
+        // Builds are recorded outside of render passes only.
+        endActiveRenderPass();
+
         assert(dstAccelerationStructure != nullptr);
         assert(scratchBuffer.ref != nullptr);
 
@@ -3625,6 +3628,9 @@ namespace plume {
     }
 
     void VulkanCommandList::buildTopLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, RenderBufferReference instancesBuffer, const RenderTopLevelASBuildInfo &buildInfo) {
+        // Builds are recorded outside of render passes only.
+        endActiveRenderPass();
+
         assert(dstAccelerationStructure != nullptr);
         assert(scratchBuffer.ref != nullptr);
         assert(instancesBuffer.ref != nullptr);
