@@ -4298,7 +4298,13 @@ namespace plume {
             createDeviceChain = &rayTracingPipelineFeatures;
         }
 
-        const bool rayQuerySupported = rayQueryFound && rayQueryFeatures.rayQuery && accelerationStructureFeatures.accelerationStructure;
+        // The structure builds and the ray query shaders (SPIR-V 1.5, the Vulkan 1.2 the instance asks for) need device addresses, the deferred host
+        // operations extension (the acceleration structure extension depends on it) and a device that is Vulkan 1.2 itself: without any of them the
+        // feature is not offered, whatever the ray query structures say.
+        const bool rayQueryDependenciesFound = bufferDeviceAddressFeatures.bufferDeviceAddress &&
+            (physicalDeviceProperties.apiVersion >= VK_API_VERSION_1_2) &&
+            (supportedOptionalExtensions.find(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) != supportedOptionalExtensions.end());
+        const bool rayQuerySupported = rayQueryFound && rayQueryFeatures.rayQuery && accelerationStructureFeatures.accelerationStructure && rayQueryDependenciesFound;
         if (rayQuerySupported) {
             rayQueryFeatures.pNext = createDeviceChain;
             createDeviceChain = &rayQueryFeatures;
