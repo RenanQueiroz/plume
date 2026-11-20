@@ -1294,7 +1294,7 @@ namespace plume {
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
-            srvDesc.RaytracingAccelerationStructure.Location = interfaceAccelerationStructure->buffer->d3d->GetGPUVirtualAddress();
+            srvDesc.RaytracingAccelerationStructure.Location = interfaceAccelerationStructure->buffer->d3d->GetGPUVirtualAddress() + interfaceAccelerationStructure->offset;
             setSRV(descriptorIndex, nullptr, &srvDesc);
         }
         else {
@@ -4054,6 +4054,7 @@ namespace plume {
                 capabilities.geometryShader = true;
                 capabilities.raytracing = rtSupportOption;
                 capabilities.raytracingStateUpdate = rtStateUpdateSupportOption;
+                capabilities.rayQuery = rtStateUpdateSupportOption && (highestShaderModelOption >= 0x65);
                 capabilities.sampleLocations = samplePositionsOption;
                 capabilities.resolveRegion = resolveRegionOption;
                 capabilities.resolveModes = samplePositionsOption; // Resolve modes require sample positions support.

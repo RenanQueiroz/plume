@@ -99,6 +99,9 @@ namespace plume {
         VK_NV_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        // Ray queries (inline ray tracing from compute and other shaders). Work with the acceleration structure extension alone,
+        // some drivers have no ray tracing pipelines. Dropped again below when the device lacks the feature.
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
         VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
         VK_EXT_SAMPLE_LOCATIONS_EXTENSION_NAME,
@@ -656,7 +659,7 @@ namespace plume {
         }
     }
     
-    static VkPipelineStageFlags toStageFlags(RenderBarrierStages stages, bool geometrySupported, bool rtSupported) {
+    static VkPipelineStageFlags toStageFlags(RenderBarrierStages stages, bool geometrySupported, bool accelerationStructureSupported, bool rtPipelineSupported) {
         VkPipelineStageFlags flags = 0;
 
         if (stages & RenderBarrierStage::GRAPHICS) {
@@ -676,8 +679,11 @@ namespace plume {
         if (stages & RenderBarrierStage::COMPUTE) {
             flags |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
-            if (rtSupported) {
+            if (accelerationStructureSupported) {
                 flags |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            }
+
+            if (rtPipelineSupported) {
                 flags |= VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
             }
         }
@@ -933,6 +939,11 @@ namespace plume {
         // The specification imposes an alignment requirement for SBTs.
         if (desc.flags & RenderBufferFlag::SHADER_BINDING_TABLE) {
             minAlignment = device->rtPipelineProperties.shaderGroupBaseAlignment;
+        }
+
+        // The scratch address of an acceleration structure build has one too (the offset of a build inside the buffer must keep it).
+        if (desc.flags & RenderBufferFlag::ACCELERATION_STRUCTURE_SCRATCH) {
+            minAlignment = std::max<VkDeviceSize>(minAlignment, device->accelerationStructureProperties.minAccelerationStructureScratchOffsetAlignment);
         }
 
         VkResult res;
@@ -2998,8 +3009,9 @@ namespace plume {
 
         const bool geometryEnabled = queue->device->capabilities.geometryShader;
         const bool rtEnabled = queue->device->capabilities.raytracing;
+        const bool accelerationStructureEnabled = rtEnabled || queue->device->capabilities.rayQuery;
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | toStageFlags(stages, geometryEnabled, rtEnabled);
+        VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | toStageFlags(stages, geometryEnabled, accelerationStructureEnabled, rtEnabled);
         thread_local std::vector<VkBufferMemoryBarrier> bufferMemoryBarriers;
         thread_local std::vector<VkImageMemoryBarrier> imageMemoryBarriers;
         bufferMemoryBarriers.clear();
@@ -3018,7 +3030,13 @@ namespace plume {
             bufferMemoryBarrier.offset = 0;
             bufferMemoryBarrier.size = interfaceBuffer->desc.size;
             bufferMemoryBarriers.emplace_back(bufferMemoryBarrier);
-            srcStageMask |= toStageFlags(interfaceBuffer->barrierStages, geometryEnabled, rtEnabled);
+            srcStageMask |= toStageFlags(interfaceBuffer->barrierStages, geometryEnabled, accelerationStructureEnabled, rtEnabled);
+
+            // The builds write these buffers from the build stage, whatever stages the buffer was last barriered for.
+            if (accelerationStructureEnabled && (interfaceBuffer->desc.flags & (RenderBufferFlag::ACCELERATION_STRUCTURE | RenderBufferFlag::ACCELERATION_STRUCTURE_SCRATCH))) {
+                srcStageMask |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            }
+
             interfaceBuffer->barrierStages = stages;
         }
 
@@ -3038,7 +3056,7 @@ namespace plume {
             imageMemoryBarrier.subresourceRange.layerCount = interfaceTexture->desc.arraySize;
             imageMemoryBarrier.subresourceRange.aspectMask = toAspectFlags(interfaceTexture->desc.format, interfaceTexture->desc.flags);
             imageMemoryBarriers.emplace_back(imageMemoryBarrier);
-            srcStageMask |= toStageFlags(interfaceTexture->barrierStages, geometryEnabled, rtEnabled);
+            srcStageMask |= toStageFlags(interfaceTexture->barrierStages, geometryEnabled, accelerationStructureEnabled, rtEnabled);
             interfaceTexture->textureLayout = textureBarrier.layout;
             interfaceTexture->barrierStages = stages;
         }
@@ -3581,6 +3599,9 @@ namespace plume {
     }
     
     void VulkanCommandList::buildBottomLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, const RenderBottomLevelASBuildInfo &buildInfo) {
+        // Builds are recorded outside of render passes only.
+        endActiveRenderPass();
+
         assert(dstAccelerationStructure != nullptr);
         assert(scratchBuffer.ref != nullptr);
 
@@ -3604,17 +3625,15 @@ namespace plume {
         buildGeometryInfo.pGeometries = reinterpret_cast<const VkAccelerationStructureGeometryKHR *>(buildInfo.buildData.data());
         buildGeometryInfo.geometryCount = buildInfo.meshCount;
 
-        VkAccelerationStructureBuildRangeInfoKHR buildRangeInfo = {};
-        buildRangeInfo.primitiveCount = buildInfo.primitiveCount;
-        buildRangeInfo.primitiveOffset = 0;
-        buildRangeInfo.firstVertex = 0;
-        buildRangeInfo.transformOffset = 0;
-
-        VkAccelerationStructureBuildRangeInfoKHR *buildRangeInfoPtr = &buildRangeInfo;
-        vkCmdBuildAccelerationStructuresKHR(vk, 1, &buildGeometryInfo, &buildRangeInfoPtr);
+        // One range per geometry, stored after the geometries by setBottomLevelASBuildInfo.
+        const VkAccelerationStructureBuildRangeInfoKHR *buildRangeInfos = reinterpret_cast<const VkAccelerationStructureBuildRangeInfoKHR *>(buildGeometryInfo.pGeometries + buildInfo.meshCount);
+        vkCmdBuildAccelerationStructuresKHR(vk, 1, &buildGeometryInfo, &buildRangeInfos);
     }
 
     void VulkanCommandList::buildTopLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, RenderBufferReference instancesBuffer, const RenderTopLevelASBuildInfo &buildInfo) {
+        // Builds are recorded outside of render passes only.
+        endActiveRenderPass();
+
         assert(dstAccelerationStructure != nullptr);
         assert(scratchBuffer.ref != nullptr);
         assert(instancesBuffer.ref != nullptr);
@@ -3647,6 +3666,8 @@ namespace plume {
         VkAccelerationStructureBuildGeometryInfoKHR buildGeometryInfo = {};
         buildGeometryInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
         buildGeometryInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        // The flags of the size query (setTopLevelASBuildInfo): the structure was sized for a build with these.
+        buildGeometryInfo.flags = toRTASBuildFlags(buildInfo.preferFastBuild, buildInfo.preferFastTrace);
         buildGeometryInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
         buildGeometryInfo.dstAccelerationStructure = interfaceAccelerationStructure->vk;
         buildGeometryInfo.scratchData.deviceAddress = vkGetBufferDeviceAddress(queue->device->vk, &scratchAddressInfo) + scratchBuffer.offset;
@@ -4172,14 +4193,26 @@ namespace plume {
             featuresChain = &portabilityFeatures;
         }
 
+        // Ray tracing pipelines and ray queries both build on the acceleration structure extension, but not on each other.
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures = {};
+        VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures = {};
         VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures = {};
-        const bool rayTracingFound = (supportedOptionalExtensions.find(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) != supportedOptionalExtensions.end()) && (supportedOptionalExtensions.find(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) != supportedOptionalExtensions.end());
+        const bool accelerationStructureFound = supportedOptionalExtensions.find(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) != supportedOptionalExtensions.end();
+        const bool rayTracingFound = accelerationStructureFound && (supportedOptionalExtensions.find(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) != supportedOptionalExtensions.end());
+        const bool rayQueryFound = accelerationStructureFound && (supportedOptionalExtensions.find(VK_KHR_RAY_QUERY_EXTENSION_NAME) != supportedOptionalExtensions.end());
         if (rayTracingFound) {
             rayTracingPipelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
             rayTracingPipelineFeatures.pNext = featuresChain;
             featuresChain = &rayTracingPipelineFeatures;
+        }
 
+        if (rayQueryFound) {
+            rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+            rayQueryFeatures.pNext = featuresChain;
+            featuresChain = &rayQueryFeatures;
+        }
+
+        if (accelerationStructureFound) {
             accelerationStructureFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
             accelerationStructureFeatures.pNext = featuresChain;
             featuresChain = &accelerationStructureFeatures;
@@ -4245,6 +4278,15 @@ namespace plume {
             vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties2);
         }
 
+        if (accelerationStructureFound) {
+            accelerationStructureProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+
+            VkPhysicalDeviceProperties2 deviceProperties2 = {};
+            deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            deviceProperties2.pNext = &accelerationStructureProperties;
+            vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties2);
+        }
+
         const bool sampleLocationsFound = supportedOptionalExtensions.find(VK_EXT_SAMPLE_LOCATIONS_EXTENSION_NAME) != supportedOptionalExtensions.end();
         if (sampleLocationsFound) {
             sampleLocationProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLE_LOCATIONS_PROPERTIES_EXT;
@@ -4267,11 +4309,29 @@ namespace plume {
 
         // Build the device creation chain.
         void *createDeviceChain = nullptr;
-        const bool rayTracingSupported = rayTracingPipelineFeatures.rayTracingPipeline && accelerationStructureFeatures.accelerationStructure;
+        const bool rayTracingSupported = rayTracingFound && rayTracingPipelineFeatures.rayTracingPipeline && accelerationStructureFeatures.accelerationStructure;
         if (rayTracingSupported) {
             rayTracingPipelineFeatures.pNext = createDeviceChain;
             createDeviceChain = &rayTracingPipelineFeatures;
+        }
 
+        // The structure builds and the ray query shaders (SPIR-V 1.5, the Vulkan 1.2 the instance asks for) need device addresses, the deferred host
+        // operations extension (the acceleration structure extension depends on it) and a device that is Vulkan 1.2 itself: without any of them the
+        // feature is not offered, whatever the ray query structures say.
+        const bool rayQueryDependenciesFound = bufferDeviceAddressFeatures.bufferDeviceAddress &&
+            (physicalDeviceProperties.apiVersion >= VK_API_VERSION_1_2) &&
+            (supportedOptionalExtensions.find(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) != supportedOptionalExtensions.end());
+        const bool rayQuerySupported = rayQueryFound && rayQueryFeatures.rayQuery && accelerationStructureFeatures.accelerationStructure && rayQueryDependenciesFound;
+        if (rayQuerySupported) {
+            rayQueryFeatures.pNext = createDeviceChain;
+            createDeviceChain = &rayQueryFeatures;
+        }
+        else {
+            supportedOptionalExtensions.erase(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        }
+
+        // The acceleration structure features go on when either of the two needs them.
+        if (rayTracingSupported || rayQuerySupported) {
             accelerationStructureFeatures.pNext = createDeviceChain;
             createDeviceChain = &accelerationStructureFeatures;
         }
@@ -4547,6 +4607,7 @@ namespace plume {
         capabilities.geometryShader = deviceFeatures.features.geometryShader;
         capabilities.raytracing = rayTracingSupported;
         capabilities.raytracingStateUpdate = false;
+        capabilities.rayQuery = rayQuerySupported;
         capabilities.sampleLocations = (sampleLocationProperties.sampleLocationSampleCounts != 0);
         capabilities.resolveRegion = true;
         capabilities.resolveModes = false;
@@ -4685,8 +4746,10 @@ namespace plume {
         thread_local std::vector<uint32_t> geometryPrimitiveCounts;
         geometryPrimitiveCounts.resize(meshCount);
 
-        buildInfo.buildData.resize(sizeof(VkAccelerationStructureGeometryKHR) * meshCount);
+        // The geometries, followed by the range of each one for the build.
+        buildInfo.buildData.resize((sizeof(VkAccelerationStructureGeometryKHR) + sizeof(VkAccelerationStructureBuildRangeInfoKHR)) * meshCount);
         VkAccelerationStructureGeometryKHR *geometries = reinterpret_cast<VkAccelerationStructureGeometryKHR *>(buildInfo.buildData.data());
+        VkAccelerationStructureBuildRangeInfoKHR *buildRangeInfos = reinterpret_cast<VkAccelerationStructureBuildRangeInfoKHR *>(geometries + meshCount);
         for (uint32_t i = 0; i < meshCount; i++) {
             const RenderBottomLevelASMesh &mesh = meshes[i];
             VkAccelerationStructureGeometryKHR &geometry = geometries[i];
@@ -4729,6 +4792,8 @@ namespace plume {
                 geometryPrimitiveCounts[i] = mesh.vertexCount / 3;
             }
 
+            buildRangeInfos[i] = {};
+            buildRangeInfos[i].primitiveCount = geometryPrimitiveCounts[i];
             primitiveCount += geometryPrimitiveCounts[i];
         }
 
