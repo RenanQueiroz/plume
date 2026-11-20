@@ -3386,6 +3386,32 @@ namespace plume {
             targetDesc.RenderTargetWriteMask = renderDesc.renderTargetWriteMask;
         }
 
+        // D3D12 reads only RenderTarget[0] and applies it to every target unless independent blending is
+        // enabled, so the blend state and the write mask of the other targets were ignored (Vulkan and
+        // Metal apply them per attachment). It is enabled only when the targets differ in something that
+        // has an effect, so a pipeline with one target, or the same state on all of them, is created
+        // exactly as before. A logic operation is a single setting for the whole pipeline here, as on
+        // Vulkan, and D3D12 requires independent blending to be off when it is used.
+        if (!desc.logicOpEnabled) {
+            auto blendDiffers = [](const RenderBlendDesc &a, const RenderBlendDesc &b) {
+                if ((a.blendEnabled != b.blendEnabled) || (a.renderTargetWriteMask != b.renderTargetWriteMask)) {
+                    return true;
+                }
+
+                // The factors and operations only matter while blending is on.
+                return a.blendEnabled &&
+                    ((a.srcBlend != b.srcBlend) || (a.dstBlend != b.dstBlend) || (a.blendOp != b.blendOp) ||
+                     (a.srcBlendAlpha != b.srcBlendAlpha) || (a.dstBlendAlpha != b.dstBlendAlpha) || (a.blendOpAlpha != b.blendOpAlpha));
+            };
+
+            for (uint32_t i = 1; i < desc.renderTargetCount; i++) {
+                if (blendDiffers(desc.renderTargetBlend[i], desc.renderTargetBlend[0])) {
+                    psoDesc.BlendState.IndependentBlendEnable = TRUE;
+                    break;
+                }
+            }
+        }
+
         psoDesc.DSVFormat = toDXGIDepthStencilView(desc.depthTargetFormat);
 
         std::vector<D3D12_INPUT_ELEMENT_DESC> inputElements;
