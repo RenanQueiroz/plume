@@ -2514,6 +2514,11 @@ namespace plume {
             textures[i].desc.flags = RenderTextureFlag::RENDER_TARGET;
             textures[i].fillSubresourceRange();
             textures[i].createImageView(pickedSurfaceFormat.format);
+            // The semaphore that vkAcquireNextImageKHR signals is waited on at COLOR_ATTACHMENT_OUTPUT (executeCommandLists). The first
+            // barrier on a fresh image (its layout change from UNDEFINED) takes its source stages from here, and with none it only has
+            // TOP_OF_PIPE: the layout change is then not ordered after the acquire. Later barriers get the graphics stages from the
+            // barrier that put the image in the present layout.
+            textures[i].barrierStages = RenderBarrierStage::GRAPHICS;
         }
 
         // The metadata belongs to the swap chain object that was just made.
