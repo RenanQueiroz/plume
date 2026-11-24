@@ -3225,22 +3225,40 @@ namespace plume {
         if ((views != nullptr) && (viewCount > 0)) {
             // Input slots aren't actually used by Vulkan as the stride is baked into the pipeline, but we validate it for the sake of consistency with D3D12.
             assert(inputSlots != nullptr);
+            assert((queue != nullptr) && (queue->device != nullptr));
 
-            thread_local std::vector<VkBuffer> bufferVector;
-            thread_local std::vector<VkDeviceSize> offsetVector;
-            bufferVector.clear();
-            offsetVector.clear();
-            for (uint32_t i = 0; i < viewCount; i++) {
-                const VulkanBuffer *interfaceBuffer = static_cast<const VulkanBuffer *>(views[i].buffer.ref);
-                if ((interfaceBuffer == nullptr) && !queue->device->nullDescriptorSupported) {
-                    interfaceBuffer = static_cast<const VulkanBuffer *>(queue->device->nullBuffer.get());
+            auto bindBuffers = [&](VkBuffer *buffers, VkDeviceSize *offsets) {
+                for (uint32_t i = 0; i < viewCount; i++) {
+                    const VulkanBuffer *interfaceBuffer = static_cast<const VulkanBuffer *>(views[i].buffer.ref);
+                    if ((interfaceBuffer == nullptr) && !queue->device->nullDescriptorSupported) {
+                        interfaceBuffer = static_cast<const VulkanBuffer *>(queue->device->nullBuffer.get());
+                    }
+
+                    buffers[i] = (interfaceBuffer != nullptr) ? interfaceBuffer->vk : VK_NULL_HANDLE;
+                    offsets[i] = views[i].buffer.offset;
                 }
 
-                bufferVector.emplace_back((interfaceBuffer != nullptr) ? interfaceBuffer->vk : VK_NULL_HANDLE);
-                offsetVector.emplace_back(views[i].buffer.offset);
-            }
+                vkCmdBindVertexBuffers(vk, startSlot, viewCount, buffers, offsets);
+            };
 
-            vkCmdBindVertexBuffers(vk, startSlot, viewCount, bufferVector.data(), offsetVector.data());
+            // Vulkan guarantees at least 16 bindings. Devices may support more.
+            constexpr uint32_t StackViewCount = 16;
+            if (viewCount <= StackViewCount) {
+                VkBuffer buffers[StackViewCount];
+                VkDeviceSize offsets[StackViewCount];
+                bindBuffers(buffers, offsets);
+            }
+            else {
+                const uint32_t maxBindings = queue->device->physicalDeviceProperties.limits.maxVertexInputBindings;
+                if ((startSlot >= maxBindings) || (viewCount > (maxBindings - startSlot))) {
+                    assert(false && "Vertex buffer bindings out of range.");
+                    return;
+                }
+
+                std::vector<VkBuffer> buffers(viewCount);
+                std::vector<VkDeviceSize> offsets(viewCount);
+                bindBuffers(buffers.data(), offsets.data());
+            }
         }
     }
 

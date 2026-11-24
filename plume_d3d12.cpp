@@ -2300,28 +2300,40 @@ namespace plume {
     void D3D12CommandList::setVertexBuffers(uint32_t startSlot, const RenderVertexBufferView *views, uint32_t viewCount, const RenderInputSlot *inputSlots) {
         if (views != nullptr) {
             assert(inputSlots != nullptr);
+            if ((inputSlots == nullptr) && (viewCount > 0)) {
+                return;
+            }
 
-            thread_local std::vector<D3D12_VERTEX_BUFFER_VIEW> bufferViewVector;
-            bufferViewVector.resize(viewCount, {});
+            if (viewCount > D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT) {
+                assert(false && "Vertex buffer count out of range.");
+                return;
+            }
+
+            D3D12_VERTEX_BUFFER_VIEW bufferViews[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+            uint32_t foundSlots = 0;
+            // Walk backwards so the first entry for a slot supplies its stride.
+            for (uint32_t i = viewCount; i > 0; i--) {
+                const RenderInputSlot &inputSlot = inputSlots[i - 1];
+                const uint32_t viewIndex = inputSlot.index - startSlot;
+                if (viewIndex < viewCount) {
+                    bufferViews[viewIndex].StrideInBytes = inputSlot.stride;
+                    foundSlots |= 1U << viewIndex;
+                }
+            }
+
             for (uint32_t i = 0; i < viewCount; i++) {
                 const RenderVertexBufferView &renderView = views[i];
                 const D3D12Buffer *interfaceBuffer = static_cast<const D3D12Buffer *>(renderView.buffer.ref);
-                bufferViewVector[i].BufferLocation = (interfaceBuffer != nullptr) ? (interfaceBuffer->d3d->GetGPUVirtualAddress() + renderView.buffer.offset) : 0;
-                bufferViewVector[i].SizeInBytes = renderView.size;
+                bufferViews[i].BufferLocation = (interfaceBuffer != nullptr) ? (interfaceBuffer->d3d->GetGPUVirtualAddress() + renderView.buffer.offset) : 0;
+                bufferViews[i].SizeInBytes = renderView.size;
 
-                bool slotFound = false;
-                for (uint32_t j = 0; j < viewCount; j++) {
-                    if (inputSlots[j].index == (startSlot + i)) {
-                        bufferViewVector[i].StrideInBytes = inputSlots[j].stride;
-                        slotFound = true;
-                        break;
-                    }
+                if ((foundSlots & (1U << i)) == 0) {
+                    assert(false && "Input slots must contain a slot with the same index as the view.");
+                    bufferViews[i].StrideInBytes = 0;
                 }
-
-                assert(slotFound && "Input slots must contain a slot with the same index as the view.");
             }
 
-            d3d->IASetVertexBuffers(startSlot, viewCount, bufferViewVector.data());
+            d3d->IASetVertexBuffers(startSlot, viewCount, bufferViews);
         }
         else {
             d3d->IASetVertexBuffers(startSlot, viewCount, nullptr);
