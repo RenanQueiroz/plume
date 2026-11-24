@@ -1421,6 +1421,11 @@ namespace plume {
             }
         }
 
+        if (waitableObject != NULL) {
+            CloseHandle(waitableObject);
+            waitableObject = NULL;
+        }
+
         if (d3d != nullptr) {
             d3d->Release();
         }
