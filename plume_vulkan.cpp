@@ -86,6 +86,7 @@ namespace plume {
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME,
         VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
+        VK_EXT_PRIVATE_DATA_EXTENSION_NAME,
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
         VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME,
         // Compute effects (temporal upscalers, frame generation): 16-bit shader math and storage, and pipelines that
@@ -4265,6 +4266,14 @@ namespace plume {
             featuresChain = &deviceFaultFeatures;
         }
 
+        // Streamline creates a private data slot on this device (vkCreatePrivateDataSlot): enable the feature through VK_EXT_private_data where the driver has it.
+        VkPhysicalDevicePrivateDataFeatures privateDataFeatures = {};
+        if (supportedOptionalExtensions.count(VK_EXT_PRIVATE_DATA_EXTENSION_NAME) != 0) {
+            privateDataFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES;
+            privateDataFeatures.pNext = featuresChain;
+            featuresChain = &privateDataFeatures;
+        }
+
         VkPhysicalDeviceFeatures2 deviceFeatures = {};
         deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         deviceFeatures.pNext = featuresChain;
@@ -4454,6 +4463,15 @@ namespace plume {
         }
         else {
             supportedOptionalExtensions.erase(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+        }
+
+        if (privateDataFeatures.privateData) {
+            privateDataFeatures.pNext = createDeviceChain;
+            createDeviceChain = &privateDataFeatures;
+        }
+
+        if (!privateDataFeatures.privateData) {
+            supportedOptionalExtensions.erase(VK_EXT_PRIVATE_DATA_EXTENSION_NAME);
         }
 
         // Retrieve the information for the queue families.
