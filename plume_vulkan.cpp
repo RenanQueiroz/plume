@@ -1569,15 +1569,12 @@ namespace plume {
             inputAssembly.primitiveRestartEnable = VK_TRUE;
         }
 
-        uint32_t renderTargetCount = desc.renderTargetCount;
-        if (renderTargetCount == 0 && desc.depthTargetFormat != RenderFormat::UNKNOWN) {
-            renderTargetCount = 1;
-        }
-
+        // One viewport and one scissor, as on D3D12 (where a draw with several render targets takes viewport 0): Plume's callers set a single one (setViewports / setScissors
+        // with a count of 1), and a pipeline that declares one per render target would draw with viewports 1 to N-1 never set (VUID-vkCmdDraw-None-07831, -07832).
         VkPipelineViewportStateCreateInfo viewportState = {};
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        viewportState.viewportCount = renderTargetCount;
-        viewportState.scissorCount = renderTargetCount;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount = 1;
 
         VkPipelineRasterizationStateCreateInfo rasterization = {};
         rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
