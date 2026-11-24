@@ -270,6 +270,8 @@ namespace plume {
         virtual const RenderDeviceCapabilities &getCapabilities() const = 0;
         virtual const RenderDeviceDescription &getDescription() const = 0;
         virtual RenderSampleCounts getSampleCountsSupported(RenderFormat format) const = 0;
+        virtual bool loadPipelineCacheData(const void *, uint64_t) { return false; }
+        virtual bool getPipelineCacheData(std::vector<uint8_t> &) { return false; }
         virtual bool beginCapture() = 0;
         virtual bool endCapture() = 0;
     };

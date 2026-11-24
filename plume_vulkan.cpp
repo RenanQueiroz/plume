@@ -167,6 +167,8 @@ namespace plume {
             return VK_FORMAT_R16G16B16A16_SNORM;
         case RenderFormat::R16G16B16A16_SINT:
             return VK_FORMAT_R16G16B16A16_SINT;
+        case RenderFormat::R16G16B16A16_SSCALED:
+            return VK_FORMAT_R16G16B16A16_SSCALED;
         case RenderFormat::R32G32_TYPELESS:
             return VK_FORMAT_R32G32_SFLOAT;
         case RenderFormat::R32G32_FLOAT:
@@ -195,6 +197,8 @@ namespace plume {
             return VK_FORMAT_R16G16_SNORM;
         case RenderFormat::R16G16_SINT:
             return VK_FORMAT_R16G16_SINT;
+        case RenderFormat::R16G16_SSCALED:
+            return VK_FORMAT_R16G16_SSCALED;
         case RenderFormat::R32_TYPELESS:
             return VK_FORMAT_R32_SFLOAT;
         case RenderFormat::D32_FLOAT:
@@ -1141,7 +1145,7 @@ namespace plume {
 
     // VulkanTextureView
 
-    VulkanTextureView::VulkanTextureView(const VulkanTexture *texture, const RenderTextureViewDesc &desc) {
+    VulkanTextureView::VulkanTextureView(const VulkanTexture *texture, const RenderTextureViewDesc &desc, bool depthStencilAttachment) {
         assert(texture != nullptr);
         assert(desc.mipSlice < texture->desc.mipLevels);
         assert(desc.arrayIndex < texture->desc.arraySize);
@@ -1161,7 +1165,7 @@ namespace plume {
         viewInfo.components.g = toVk(desc.componentMapping.g);
         viewInfo.components.b = toVk(desc.componentMapping.b);
         viewInfo.components.a = toVk(desc.componentMapping.a);
-        viewInfo.subresourceRange.aspectMask = toViewAspectFlags(texture->desc.flags);
+        viewInfo.subresourceRange.aspectMask = depthStencilAttachment ? toAspectFlags(texture->desc.format, texture->desc.flags) : toViewAspectFlags(texture->desc.flags);
         if (desc.planeSlice != 0) {
             // The stencil plane of a depth-stencil texture: a sampled view has one aspect.
             assert((desc.planeSlice == 1) && RenderFormatIsStencil(texture->desc.format) && "Only depth-stencil textures have a second plane.");
@@ -1463,7 +1467,7 @@ namespace plume {
         pipelineInfo.layout = pipelineLayout->vk;
         pipelineInfo.stage = stageInfo;
 
-        VkResult res = vkCreateComputePipelines(device->vk, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vk);
+        VkResult res = vkCreateComputePipelines(device->vk, device->pipelineCache, 1, &pipelineInfo, nullptr, &vk);
         if (res != VK_SUCCESS) {
             fprintf(stderr, "vkCreateComputePipelines failed with error code 0x%X.\n", res);
             return;
@@ -1726,7 +1730,7 @@ namespace plume {
         pipelineInfo.layout = pipelineLayout->vk;
         pipelineInfo.renderPass = renderPass;
 
-        VkResult res = vkCreateGraphicsPipelines(device->vk, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vk);
+        VkResult res = vkCreateGraphicsPipelines(device->vk, device->pipelineCache, 1, &pipelineInfo, nullptr, &vk);
         if (res != VK_SUCCESS) {
             fprintf(stderr, "vkCreateGraphicsPipelines failed with error code 0x%X.\n", res);
             return;
@@ -2752,7 +2756,7 @@ namespace plume {
             if (RenderFormatIsDepth(depthAttachmentViewDesc.format) && RenderFormatIsStencil(depthAttachmentViewDesc.format)) {
                 // Base image view is configured for sampling depth. For framebuffer attachment,
                 // create a separate view configured for both depth and stencil.
-                depthAttachmentView = std::make_unique<VulkanTextureView>(depthAttachment, depthAttachmentViewDesc);
+                depthAttachmentView = std::make_unique<VulkanTextureView>(depthAttachment, depthAttachmentViewDesc, true);
                 depthAttachmentImageView = depthAttachmentView->vk;
             }
             assert((depthAttachment->desc.flags & RenderTextureFlag::DEPTH_TARGET) && "Depth attachment must be a depth target.");
@@ -4616,6 +4620,14 @@ namespace plume {
             return;
         }
 
+        VkPipelineCacheCreateInfo pipelineCacheInfo = {};
+        pipelineCacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        res = vkCreatePipelineCache(vk, &pipelineCacheInfo, nullptr, &pipelineCache);
+        if (res != VK_SUCCESS) {
+            fprintf(stderr, "vkCreatePipelineCache failed with error code 0x%X.\n", res);
+            pipelineCache = VK_NULL_HANDLE;
+        }
+
         // Find the biggest device local memory available on the device.
         VkDeviceSize memoryHeapSize = 0;
         const VkPhysicalDeviceMemoryProperties *memoryProps = nullptr;
@@ -4982,12 +4994,74 @@ namespace plume {
         }
     }
 
+    bool VulkanDevice::loadPipelineCacheData(const void *data, uint64_t size) {
+        if (pipelineCache == VK_NULL_HANDLE || data == nullptr || size < sizeof(VkPipelineCacheHeaderVersionOne)) {
+            return false;
+        }
+
+        VkPipelineCacheHeaderVersionOne header = {};
+        memcpy(&header, data, sizeof(header));
+        if (header.headerSize < sizeof(header) || header.headerSize > size ||
+            header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+            header.vendorID != physicalDeviceProperties.vendorID ||
+            header.deviceID != physicalDeviceProperties.deviceID ||
+            memcmp(header.pipelineCacheUUID, physicalDeviceProperties.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
+            return false;
+        }
+
+        VkPipelineCacheCreateInfo cacheInfo = {};
+        cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        cacheInfo.initialDataSize = size_t(size);
+        cacheInfo.pInitialData = data;
+
+        VkPipelineCache loadedCache = VK_NULL_HANDLE;
+        if (vkCreatePipelineCache(vk, &cacheInfo, nullptr, &loadedCache) != VK_SUCCESS) {
+            return false;
+        }
+
+        VkResult res = vkMergePipelineCaches(vk, pipelineCache, 1, &loadedCache);
+        vkDestroyPipelineCache(vk, loadedCache, nullptr);
+        return res == VK_SUCCESS;
+    }
+
+    bool VulkanDevice::getPipelineCacheData(std::vector<uint8_t> &data) {
+        if (pipelineCache == VK_NULL_HANDLE) {
+            return false;
+        }
+
+        for (uint32_t attempt = 0; attempt < 3; attempt++) {
+            size_t size = 0;
+            if (vkGetPipelineCacheData(vk, pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0) {
+                return false;
+            }
+
+            data.resize(size);
+            VkResult res = vkGetPipelineCacheData(vk, pipelineCache, &size, data.data());
+            if (res == VK_SUCCESS) {
+                data.resize(size);
+                return true;
+            }
+
+            if (res != VK_INCOMPLETE) {
+                break;
+            }
+        }
+
+        data.clear();
+        return false;
+    }
+
     void VulkanDevice::release() {
         nullBuffer = nullptr; // force destruction before destroying allocator
 
         if (allocator != VK_NULL_HANDLE) {
             vmaDestroyAllocator(allocator);
             allocator = VK_NULL_HANDLE;
+        }
+
+        if (pipelineCache != VK_NULL_HANDLE) {
+            vkDestroyPipelineCache(vk, pipelineCache, nullptr);
+            pipelineCache = VK_NULL_HANDLE;
         }
 
         if (vk != VK_NULL_HANDLE) {
