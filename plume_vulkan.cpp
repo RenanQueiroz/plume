@@ -2452,10 +2452,9 @@ namespace plume {
         createInfo.presentMode = requiredPresentMode;
         createInfo.clipped = VK_TRUE;
 
-        // A recreate passes the live swap chain as oldSwapchain. It is kept here: the retry below can't pass it again, and it is
-        // destroyed from here once the new one exists.
-        const VkSwapchainKHR oldSwapchain = vk;
-        createInfo.oldSwapchain = oldSwapchain;
+        // Keep ownership in vk until both creation attempts are done. Vulkan retires oldSwapchain
+        // even if creation fails, and the retry cannot pass the retired handle again.
+        createInfo.oldSwapchain = vk;
 
         // VK_NV_low_latency2: the swap chain is made in the latency mode, which is what lets a sleep mode be set on it (the mode stays off
         // until vkSetLatencySleepModeNV turns it on). A driver that refuses it is asked again without it; latencyMode says which was made.
@@ -2464,31 +2463,32 @@ namespace plume {
         latencyCreateInfo.latencyModeEnable = VK_TRUE;
         createInfo.pNext = commandQueue->device->nvLowLatency ? &latencyCreateInfo : nullptr;
 
-        VkResult res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &vk);
+        VkSwapchainKHR replacement = VK_NULL_HANDLE;
+        VkResult res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &replacement);
         if ((res != VK_SUCCESS) && (createInfo.pNext != nullptr)) {
             // The failed call already retired oldSwapchain (a failed call retires it too), and a retired swap chain can't be passed
             // again. It no longer holds the surface, so the retry goes without it.
             createInfo.pNext = nullptr;
             createInfo.oldSwapchain = VK_NULL_HANDLE;
-            res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &vk);
+            res = vkCreateSwapchainKHR(commandQueue->device->vk, &createInfo, nullptr, &replacement);
         }
 
         latencyMode = (res == VK_SUCCESS) && (createInfo.pNext != nullptr);
         createInfo.pNext = nullptr;
+        createInfo.oldSwapchain = VK_NULL_HANDLE;
+        releaseSwapChain();
         if (res != VK_SUCCESS) {
-            fprintf(stderr, "vkCreateSwapchainKHR failed with error code 0x%X.\n", res);
+            fprintf(stderr, "vkCreateSwapchainKHR failed with error code 0x%X (mode %d, %ux%u).\n",
+                    static_cast<unsigned int>(res), requiredPresentMode, width, height);
             return false;
         }
+        vk = replacement;
 
         // Store the chosen present mode to identify later whether the swapchain needs to be recreated.
         createdPresentMode = requiredPresentMode;
 
         // Reset present counter.
         presentCount = 1;
-
-        if (oldSwapchain != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(commandQueue->device->vk, oldSwapchain, nullptr);
-        }
 
         uint32_t retrievedImageCount = 0;
         vkGetSwapchainImagesKHR(commandQueue->device->vk, vk, &retrievedImageCount, nullptr);
