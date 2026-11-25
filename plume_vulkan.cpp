@@ -134,6 +134,18 @@ namespace plume {
         return (value + powerOf2Alignment - 1) & ~(powerOf2Alignment - 1);
     }
 
+    // The size of the blocks of device memory VMA makes, for a device whose biggest device local heap is `biggestHeapBytes`. 0 leaves
+    // VMA's own choice: 256 MiB blocks for a heap over 1 GiB (and an eighth of a smaller heap). The last block of every memory type
+    // in use is mostly empty, which on a card with little video memory is a real share of it: in a ten minute drive the blocks held
+    // about 300 MiB less with 16 MiB blocks (forced on a 16 GB card to measure it). D3D12 asks D3D12MA for 4 MiB heaps for the same
+    // reason; here a card with 6 GiB or less (the 4 GB and 6 GB cards) gets 16 MiB blocks (an allocation over 8 MiB gets a block of
+    // its own, as in D3D12MA) and a bigger card keeps VMA's default, where the slack is a small share of its memory.
+    static VkDeviceSize preferredVmaBlockSize(VkDeviceSize biggestHeapBytes) {
+        constexpr VkDeviceSize smallVideoMemory = VkDeviceSize(6) * 1024 * 1024 * 1024;
+        constexpr VkDeviceSize smallBlock = VkDeviceSize(16) * 1024 * 1024;
+        return (biggestHeapBytes != 0 && biggestHeapBytes <= smallVideoMemory) ? smallBlock : 0;
+    }
+
     VkFormat toVk(RenderFormat format) {
         switch (format) {
         case RenderFormat::UNKNOWN:
@@ -4578,6 +4590,20 @@ namespace plume {
         allocatorInfo.pVulkanFunctions = &vmaFunctions;
         allocatorInfo.instance = renderInterface->instance;
         allocatorInfo.vulkanApiVersion = renderInterface->appInfo.apiVersion;
+
+        // Smaller blocks where video memory is small (preferredVmaBlockSize). The heap is read here, before the allocator exists:
+        // the same biggest device local heap that fills description.dedicatedVideoMemory below.
+        {
+            VkPhysicalDeviceMemoryProperties heapProps = {};
+            vkGetPhysicalDeviceMemoryProperties(physicalDevice, &heapProps);
+            VkDeviceSize biggestLocalHeap = 0;
+            for (uint32_t i = 0; i < heapProps.memoryHeapCount; i++) {
+                if (heapProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                    biggestLocalHeap = std::max(heapProps.memoryHeaps[i].size, biggestLocalHeap);
+                }
+            }
+            allocatorInfo.preferredLargeHeapBlockSize = preferredVmaBlockSize(biggestLocalHeap);
+        }
 
         res = vmaCreateAllocator(&allocatorInfo, &allocator);
         if (res != VK_SUCCESS) {
