@@ -11,8 +11,13 @@
 #include "plume_vulkan.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 
 #if PLUME_SDL_VULKAN_ENABLED
@@ -140,10 +145,83 @@ namespace plume {
     // about 300 MiB less with 16 MiB blocks (forced on a 16 GB card to measure it). D3D12 asks D3D12MA for 4 MiB heaps for the same
     // reason; here a card with 6 GiB or less (the 4 GB and 6 GB cards) gets 16 MiB blocks (an allocation over 8 MiB gets a block of
     // its own, as in D3D12MA) and a bigger card keeps VMA's default, where the slack is a small share of its memory.
-    static VkDeviceSize preferredVmaBlockSize(VkDeviceSize biggestHeapBytes) {
+    static VkDeviceSize preferredVmaBlockSize(VkDeviceSize biggestHeapBytes, bool forceSmallBlocks) {
         constexpr VkDeviceSize smallVideoMemory = VkDeviceSize(6) * 1024 * 1024 * 1024;
         constexpr VkDeviceSize smallBlock = VkDeviceSize(16) * 1024 * 1024;
-        return (biggestHeapBytes != 0 && biggestHeapBytes <= smallVideoMemory) ? smallBlock : 0;
+        return (forceSmallBlocks || (biggestHeapBytes != 0 && biggestHeapBytes <= smallVideoMemory)) ? smallBlock : 0;
+    }
+
+    // Debug only, read from the environment; nothing changes when they are not set.
+    // PLUME_VMA_FORCE_SMALL_BLOCKS=1: take the small block path above whatever the card's video memory, to try it on a big card.
+    // PLUME_VMA_STATS=<seconds>: one line to stderr every so many seconds (checked at a present) with what VMA holds in each memory heap:
+    // the blocks (every VkDeviceMemory it made; a dedicated allocation counts as one) and their bytes, and the allocations in them.
+    static std::string environmentText(const char *name) {
+        std::string text;
+#   if defined(_MSC_VER)
+        // getenv is deprecated in the Windows C runtime.
+        char *buffer = nullptr;
+        size_t size = 0;
+        if ((_dupenv_s(&buffer, &size, name) == 0) && (buffer != nullptr)) {
+            text = buffer;
+        }
+
+        free(buffer);
+#   else
+        const char *value = std::getenv(name);
+        if (value != nullptr) {
+            text = value;
+        }
+#   endif
+        return text;
+    }
+
+    static bool vmaForceSmallBlocks() {
+        const std::string value = environmentText("PLUME_VMA_FORCE_SMALL_BLOCKS");
+        return !value.empty() && (value[0] != '0');
+    }
+
+    static double vmaStatsSeconds() {
+        return std::atof(environmentText("PLUME_VMA_STATS").c_str());
+    }
+
+    static void reportVmaStatistics(VulkanDevice *device) {
+        static const double intervalSeconds = vmaStatsSeconds();
+        if (intervalSeconds <= 0.0) {
+            return;
+        }
+
+        static std::mutex statsMutex;
+        static bool started = false;
+        static std::chrono::steady_clock::time_point lastLine;
+        const std::scoped_lock statsLock(statsMutex);
+        const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        if (!started) {
+            started = true;
+            lastLine = now;
+            return;
+        }
+
+        if (std::chrono::duration<double>(now - lastLine).count() < intervalSeconds) {
+            return;
+        }
+
+        lastLine = now;
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS] = {};
+        vmaGetHeapBudgets(device->allocator, budgets);
+        const VkPhysicalDeviceMemoryProperties *memoryProps = nullptr;
+        vmaGetMemoryProperties(device->allocator, &memoryProps);
+        std::string line = "[vma]";
+        for (uint32_t i = 0; i < memoryProps->memoryHeapCount; i++) {
+            const VmaStatistics &heap = budgets[i].statistics;
+            char heapText[192];
+            snprintf(heapText, sizeof(heapText), " heap %u (%s, %llu MiB): %u blocks %llu MiB, %u allocations %llu MiB;", i,
+                (memoryProps->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ? "device local" : "host",
+                (unsigned long long)(memoryProps->memoryHeaps[i].size >> 20), heap.blockCount, (unsigned long long)(heap.blockBytes >> 20),
+                heap.allocationCount, (unsigned long long)(heap.allocationBytes >> 20));
+            line += heapText;
+        }
+
+        fprintf(stderr, "%s\n", line.c_str());
     }
 
     VkFormat toVk(RenderFormat format) {
@@ -2407,6 +2485,7 @@ namespace plume {
             return false;
         }
 
+        reportVmaStatistics(commandQueue->device);
         return true;
     }
 
@@ -4602,7 +4681,14 @@ namespace plume {
                     biggestLocalHeap = std::max(heapProps.memoryHeaps[i].size, biggestLocalHeap);
                 }
             }
-            allocatorInfo.preferredLargeHeapBlockSize = preferredVmaBlockSize(biggestLocalHeap);
+            const bool forceSmallBlocks = vmaForceSmallBlocks();
+            allocatorInfo.preferredLargeHeapBlockSize = preferredVmaBlockSize(biggestLocalHeap, forceSmallBlocks);
+            if (forceSmallBlocks || (vmaStatsSeconds() > 0.0)) {
+                fprintf(stderr, "[vma] preferredLargeHeapBlockSize %s%llu MiB%s (biggest device local heap %llu MiB)\n",
+                    (allocatorInfo.preferredLargeHeapBlockSize == 0) ? "default, VMA's " : "",
+                    (unsigned long long)((allocatorInfo.preferredLargeHeapBlockSize == 0) ? 256 : (allocatorInfo.preferredLargeHeapBlockSize >> 20)),
+                    forceSmallBlocks ? ", forced by PLUME_VMA_FORCE_SMALL_BLOCKS" : "", (unsigned long long)(biggestLocalHeap >> 20));
+            }
         }
 
         res = vmaCreateAllocator(&allocatorInfo, &allocator);
