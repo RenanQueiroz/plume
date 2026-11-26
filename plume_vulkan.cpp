@@ -1709,7 +1709,7 @@ namespace plume {
             renderTargetFormats[i] = toVk(desc.renderTargetFormat[i]);
         }
 
-        renderPass = createRenderPass(device, renderTargetFormats.data(), desc.renderTargetCount, toVk(desc.depthTargetFormat), VkSampleCountFlagBits(desc.multisampling.sampleCount));
+        renderPass = createRenderPass(device, renderTargetFormats.data(), desc.renderTargetCount, toVk(desc.depthTargetFormat), VkSampleCountFlagBits(desc.multisampling.sampleCount), creationResult);
         if (renderPass == VK_NULL_HANDLE) {
             return;
         }
@@ -1730,9 +1730,9 @@ namespace plume {
         pipelineInfo.layout = pipelineLayout->vk;
         pipelineInfo.renderPass = renderPass;
 
-        VkResult res = vkCreateGraphicsPipelines(device->vk, device->pipelineCache, 1, &pipelineInfo, nullptr, &vk);
-        if (res != VK_SUCCESS) {
-            fprintf(stderr, "vkCreateGraphicsPipelines failed with error code 0x%X.\n", res);
+        creationResult = vkCreateGraphicsPipelines(device->vk, device->pipelineCache, 1, &pipelineInfo, nullptr, &vk);
+        if (creationResult != VK_SUCCESS) {
+            fprintf(stderr, "vkCreateGraphicsPipelines failed with error code 0x%X.\n", creationResult);
             return;
         }
     }
@@ -1756,7 +1756,7 @@ namespace plume {
         return RenderPipelineProgram();
     }
 
-    VkRenderPass VulkanGraphicsPipeline::createRenderPass(VulkanDevice *device, const VkFormat *renderTargetFormat, uint32_t renderTargetCount, VkFormat depthTargetFormat, VkSampleCountFlagBits sampleCount) {
+    VkRenderPass VulkanGraphicsPipeline::createRenderPass(VulkanDevice *device, const VkFormat *renderTargetFormat, uint32_t renderTargetCount, VkFormat depthTargetFormat, VkSampleCountFlagBits sampleCount, VkResult &result) {
         VkRenderPass renderPass = VK_NULL_HANDLE;
         VkSubpassDescription subpass = {};
         VkAttachmentReference depthReference = {};
@@ -1811,12 +1811,12 @@ namespace plume {
         passInfo.pSubpasses = &subpass;
         passInfo.subpassCount = 1;
 
-        VkResult res = vkCreateRenderPass(device->vk, &passInfo, nullptr, &renderPass);
-        if (res == VK_SUCCESS) {
+        result = vkCreateRenderPass(device->vk, &passInfo, nullptr, &renderPass);
+        if (result == VK_SUCCESS) {
             return renderPass;
         }
         else {
-            fprintf(stderr, "vkCreateRenderPass failed with error code 0x%X.\n", res);
+            fprintf(stderr, "vkCreateRenderPass failed with error code 0x%X.\n", result);
             return VK_NULL_HANDLE;
         }
     }

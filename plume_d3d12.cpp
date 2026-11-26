@@ -3536,7 +3536,7 @@ namespace plume {
 
         psoDesc.InputLayout = { inputElements.data(), UINT(inputElements.size()) };
 
-        device->d3d->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d));
+        creationResult = device->d3d->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&d3d));
 
         // Some AMD drivers set the sample positions only when the sample count changes between two
         // pipelines, and set them to the pixel center for an aliased line pipeline, so every triangle

@@ -427,6 +427,7 @@ namespace plume {
 
     struct D3D12GraphicsPipeline : D3D12Pipeline {
         ID3D12PipelineState *d3d = nullptr;
+        HRESULT creationResult = S_OK;
         ID3D12PipelineState *msaaLineGuard = nullptr;
         std::vector<RenderInputSlot> inputSlots;
         D3D12_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
