@@ -4008,7 +4008,7 @@ namespace plume {
         return std::make_unique<MetalQueryPool>(this, queryCount);
     }
 
-    void MetalDevice::setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild, bool preferFastTrace) {
+    void MetalDevice::setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild, bool preferFastTrace, bool allowCompaction) {
         // TODO: Unimplemented (Raytracing).
     }
 

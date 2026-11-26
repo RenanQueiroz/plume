@@ -73,6 +73,8 @@ namespace plume {
     struct RenderTexture;
     struct RenderTextureView;
     struct RenderQueryPool;
+    struct RenderASCompactedSizeQuery;
+    struct RenderAccelerationStructure;
 
     // Enums.
 
@@ -1739,6 +1741,7 @@ namespace plume {
         uint32_t primitiveCount = 0;
         bool preferFastBuild = false;
         bool preferFastTrace = false;
+        bool allowCompaction = false;
         uint64_t scratchSize = 0;
         uint64_t accelerationStructureSize = 0;
 
@@ -1748,6 +1751,8 @@ namespace plume {
 
     struct RenderTopLevelASInstance {
         RenderBufferReference bottomLevelAS;
+        // Supply the BLAS object to use its native address on Vulkan.
+        const RenderAccelerationStructure *bottomLevelASObject = nullptr;
         uint32_t instanceID = 0;
         uint32_t instanceMask = 0;
         uint32_t instanceContributionToHitGroupIndex = 0;
