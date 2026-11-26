@@ -3641,6 +3641,7 @@ namespace plume {
         buildGeometryInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
         buildGeometryInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         buildGeometryInfo.flags = toRTASBuildFlags(buildInfo.preferFastBuild, buildInfo.preferFastTrace);
+        buildGeometryInfo.flags |= buildInfo.allowCompaction ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0;
         buildGeometryInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
         buildGeometryInfo.dstAccelerationStructure = interfaceAccelerationStructure->vk;
         buildGeometryInfo.scratchData.deviceAddress = vkGetBufferDeviceAddress(queue->device->vk, &scratchAddressInfo) + scratchBuffer.offset;
@@ -3708,6 +3709,58 @@ namespace plume {
 
     void VulkanCommandList::discardTexture(const RenderTexture* texture) {
         // Not required in Vulkan.
+    }
+
+    struct VulkanASCompactedSizeQuery final : RenderASCompactedSizeQuery {
+        VkDevice device = VK_NULL_HANDLE;
+        VkQueryPool pool = VK_NULL_HANDLE;
+        uint32_t capacity = 0;
+
+        ~VulkanASCompactedSizeQuery() override {
+            if (pool != VK_NULL_HANDLE) {
+                vkDestroyQueryPool(device, pool, nullptr);
+            }
+        }
+
+        bool read(uint64_t *sizes, uint32_t count) const override {
+            if ((sizes == nullptr) || (count == 0) || (count > capacity)) {
+                return false;
+            }
+
+            return vkGetQueryPoolResults(device, pool, 0, count, sizeof(uint64_t) * count, sizes, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
+        }
+    };
+
+    void VulkanCommandList::writeBottomLevelASCompactedSizes(RenderASCompactedSizeQuery *query, const RenderAccelerationStructure *const *structures, uint32_t count) {
+        const auto *sizeQuery = static_cast<const VulkanASCompactedSizeQuery *>(query);
+        assert(sizeQuery && structures && count > 0 && count <= sizeQuery->capacity);
+        endActiveRenderPass();
+
+        thread_local std::vector<VkAccelerationStructureKHR> sources;
+        sources.resize(count);
+        for (uint32_t i = 0; i < count; i++) {
+            const auto *source = static_cast<const VulkanAccelerationStructure *>(structures[i]);
+            assert(source && source->type == RenderAccelerationStructureType::BOTTOM_LEVEL);
+            sources[i] = source->vk;
+        }
+
+        vkCmdResetQueryPool(vk, sizeQuery->pool, 0, count);
+        vkCmdWriteAccelerationStructuresPropertiesKHR(vk, count, sources.data(), VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, sizeQuery->pool, 0);
+    }
+
+    void VulkanCommandList::copyBottomLevelASCompact(const RenderAccelerationStructure *dst, const RenderAccelerationStructure *src) {
+        const auto *destination = static_cast<const VulkanAccelerationStructure *>(dst);
+        const auto *source = static_cast<const VulkanAccelerationStructure *>(src);
+        assert(destination && source && destination != source);
+        assert(destination->type == RenderAccelerationStructureType::BOTTOM_LEVEL && source->type == RenderAccelerationStructureType::BOTTOM_LEVEL);
+        endActiveRenderPass();
+
+        VkCopyAccelerationStructureInfoKHR info = {};
+        info.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+        info.src = source->vk;
+        info.dst = destination->vk;
+        info.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+        vkCmdCopyAccelerationStructureKHR(vk, &info);
     }
 
     void VulkanCommandList::resetQueryPool(const RenderQueryPool *queryPool, uint32_t queryFirstIndex, uint32_t queryCount) {
@@ -4758,7 +4811,8 @@ namespace plume {
     }
 
     std::unique_ptr<RenderAccelerationStructure> VulkanDevice::createAccelerationStructure(const RenderAccelerationStructureDesc &desc) {
-        return std::make_unique<VulkanAccelerationStructure>(this, desc);
+        auto structure = std::make_unique<VulkanAccelerationStructure>(this, desc);
+        return (structure->vk != VK_NULL_HANDLE) ? std::move(structure) : nullptr;
     }
 
     std::unique_ptr<RenderPool> VulkanDevice::createPool(const RenderPoolDesc &desc) {
@@ -4785,7 +4839,26 @@ namespace plume {
         return std::make_unique<VulkanQueryPool>(this, queryCount, type);
     }
 
-    void VulkanDevice::setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild, bool preferFastTrace) {
+    std::unique_ptr<RenderASCompactedSizeQuery> VulkanDevice::createASCompactedSizeQuery(uint32_t count) {
+        if ((count == 0) || (!capabilities.raytracing && !capabilities.rayQuery)) {
+            return nullptr;
+        }
+
+        auto query = std::make_unique<VulkanASCompactedSizeQuery>();
+        query->device = vk;
+        query->capacity = count;
+        VkQueryPoolCreateInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        info.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+        info.queryCount = count;
+        if (vkCreateQueryPool(vk, &info, nullptr, &query->pool) != VK_SUCCESS) {
+            return nullptr;
+        }
+
+        return query;
+    }
+
+    void VulkanDevice::setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild, bool preferFastTrace, bool allowCompaction) {
         assert(meshes != nullptr);
         assert(meshCount > 0);
 
@@ -4848,6 +4921,7 @@ namespace plume {
         buildGeometryInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
         buildGeometryInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         buildGeometryInfo.flags = toRTASBuildFlags(preferFastBuild, preferFastTrace);
+        buildGeometryInfo.flags |= allowCompaction ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0;
         buildGeometryInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
         buildGeometryInfo.pGeometries = geometries;
         buildGeometryInfo.geometryCount = meshCount;
@@ -4857,6 +4931,7 @@ namespace plume {
         vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildGeometryInfo, geometryPrimitiveCounts.data(), &buildSizesInfo);
 
         buildInfo.meshCount = meshCount;
+        buildInfo.allowCompaction = allowCompaction;
         buildInfo.primitiveCount = primitiveCount;
         buildInfo.preferFastBuild = preferFastBuild;
         buildInfo.preferFastTrace = preferFastTrace;
@@ -4883,10 +4958,20 @@ namespace plume {
             bufferInstance.flags = instance.cullDisable ? VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR : 0;
             memcpy(bufferInstance.transform.matrix, instance.transform.m, sizeof(bufferInstance.transform.matrix));
 
-            VkBufferDeviceAddressInfo blasAddressInfo = {};
-            blasAddressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-            blasAddressInfo.buffer = interfaceBottomLevelAS->vk;
-            bufferInstance.accelerationStructureReference = vkGetBufferDeviceAddress(vk, &blasAddressInfo) + instance.bottomLevelAS.offset;
+            if (instance.bottomLevelASObject != nullptr) {
+                const auto *bottomLevel = static_cast<const VulkanAccelerationStructure *>(instance.bottomLevelASObject);
+                assert(bottomLevel->type == RenderAccelerationStructureType::BOTTOM_LEVEL);
+                VkAccelerationStructureDeviceAddressInfoKHR addressInfo = {};
+                addressInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+                addressInfo.accelerationStructure = bottomLevel->vk;
+                bufferInstance.accelerationStructureReference = vkGetAccelerationStructureDeviceAddressKHR(vk, &addressInfo);
+            }
+            else {
+                VkBufferDeviceAddressInfo blasAddressInfo = {};
+                blasAddressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+                blasAddressInfo.buffer = interfaceBottomLevelAS->vk;
+                bufferInstance.accelerationStructureReference = vkGetBufferDeviceAddress(vk, &blasAddressInfo) + instance.bottomLevelAS.offset;
+            }
         }
 
         // Retrieve the size the TLAS will require.

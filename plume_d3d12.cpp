@@ -2565,6 +2565,7 @@ namespace plume {
         buildDesc.Inputs.NumDescs = buildInfo.meshCount;
         buildDesc.Inputs.pGeometryDescs = reinterpret_cast<const D3D12_RAYTRACING_GEOMETRY_DESC *>(buildInfo.buildData.data());
         buildDesc.Inputs.Flags = toRTASBuildFlags(buildInfo.preferFastBuild, buildInfo.preferFastTrace);
+        if (buildInfo.allowCompaction) buildDesc.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
         buildDesc.DestAccelerationStructureData = interfaceAccelerationStructure->buffer->d3d->GetGPUVirtualAddress() + interfaceAccelerationStructure->offset;
         buildDesc.ScratchAccelerationStructureData = interfaceScratchBuffer->d3d->GetGPUVirtualAddress() + scratchBuffer.offset;
 
@@ -2601,6 +2602,70 @@ namespace plume {
     void D3D12CommandList::discardTexture(const RenderTexture* texture) {
         const D3D12Texture* interfaceTexture = static_cast<const D3D12Texture*>(texture);
         d3d->DiscardResource(interfaceTexture->d3d, nullptr);
+    }
+
+    struct D3D12ASCompactedSizeQuery final : RenderASCompactedSizeQuery {
+        std::unique_ptr<D3D12Buffer> gpu;
+        std::unique_ptr<D3D12Buffer> readback;
+        uint32_t capacity = 0;
+
+        bool read(uint64_t *sizes, uint32_t count) const override {
+            if ((sizes == nullptr) || (count == 0) || (count > capacity)) {
+                return false;
+            }
+
+            const RenderRange range(0, uint64_t(count) * sizeof(uint64_t));
+            const void *data = readback->map(0, &range);
+            if (data == nullptr) {
+                return false;
+            }
+
+            memcpy(sizes, data, size_t(range.end));
+            const RenderRange noWrites(0, 0);
+            readback->unmap(0, &noWrites);
+            return true;
+        }
+    };
+
+    void D3D12CommandList::writeBottomLevelASCompactedSizes(RenderASCompactedSizeQuery *query, const RenderAccelerationStructure *const *structures, uint32_t count) {
+        auto *sizeQuery = static_cast<D3D12ASCompactedSizeQuery *>(query);
+        assert(d3dV4 && sizeQuery && structures && count > 0 && count <= sizeQuery->capacity);
+        static_assert(sizeof(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE_DESC) == sizeof(uint64_t));
+
+        thread_local std::vector<D3D12_GPU_VIRTUAL_ADDRESS> sources;
+        sources.resize(count);
+        for (uint32_t i = 0; i < count; i++) {
+            const auto *source = static_cast<const D3D12AccelerationStructure *>(structures[i]);
+            assert(source && source->type == RenderAccelerationStructureType::BOTTOM_LEVEL);
+            sources[i] = source->buffer->d3d->GetGPUVirtualAddress() + source->offset;
+        }
+
+        RenderCommandList::barriers(RenderBarrierStage::COMPUTE, RenderBufferBarrier(sizeQuery->gpu.get(), RenderBufferAccess::WRITE));
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC info = {};
+        info.DestBuffer = sizeQuery->gpu->d3d->GetGPUVirtualAddress();
+        info.InfoType = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE;
+        d3dV4->EmitRaytracingAccelerationStructurePostbuildInfo(&info, count, sources.data());
+        RenderCommandList::barriers(RenderBarrierStage::COPY, RenderBufferBarrier(sizeQuery->gpu.get(), RenderBufferAccess::READ));
+        copyBufferRegion(RenderBufferReference(sizeQuery->readback.get(), 0), RenderBufferReference(sizeQuery->gpu.get(), 0), uint64_t(count) * sizeof(uint64_t));
+
+        // Leave the private GPU buffer in its initial state even if this list is abandoned.
+        D3D12_RESOURCE_BARRIER transition = {};
+        transition.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        transition.Transition.pResource = sizeQuery->gpu->d3d;
+        transition.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        transition.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        transition.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+        d3d->ResourceBarrier(1, &transition);
+        sizeQuery->gpu->resourceStates = D3D12_RESOURCE_STATE_COMMON;
+    }
+
+    void D3D12CommandList::copyBottomLevelASCompact(const RenderAccelerationStructure *dst, const RenderAccelerationStructure *src) {
+        const auto *destination = static_cast<const D3D12AccelerationStructure *>(dst);
+        const auto *source = static_cast<const D3D12AccelerationStructure *>(src);
+        assert(d3dV4 && destination && source && destination != source);
+        assert(destination->type == RenderAccelerationStructureType::BOTTOM_LEVEL && source->type == RenderAccelerationStructureType::BOTTOM_LEVEL);
+        d3dV4->CopyRaytracingAccelerationStructure(destination->buffer->d3d->GetGPUVirtualAddress() + destination->offset,
+            source->buffer->d3d->GetGPUVirtualAddress() + source->offset, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
     }
 
     void D3D12CommandList::resetQueryPool(const RenderQueryPool *queryPool, uint32_t queryFirstIndex, uint32_t queryCount) {
@@ -4334,7 +4399,24 @@ namespace plume {
         return std::make_unique<D3D12QueryPool>(this, queryCount, type);
     }
 
-    void D3D12Device::setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild, bool preferFastTrace) {
+    std::unique_ptr<RenderASCompactedSizeQuery> D3D12Device::createASCompactedSizeQuery(uint32_t count) {
+        if ((count == 0) || (!capabilities.raytracing && !capabilities.rayQuery)) {
+            return nullptr;
+        }
+
+        auto query = std::make_unique<D3D12ASCompactedSizeQuery>();
+        query->capacity = count;
+        const uint64_t bytes = uint64_t(count) * sizeof(uint64_t);
+        query->gpu = std::make_unique<D3D12Buffer>(this, nullptr, RenderBufferDesc::DefaultBuffer(bytes, RenderBufferFlag::UNORDERED_ACCESS));
+        query->readback = std::make_unique<D3D12Buffer>(this, nullptr, RenderBufferDesc::ReadbackBuffer(bytes));
+        if ((query->gpu->d3d == nullptr) || (query->readback->d3d == nullptr)) {
+            return nullptr;
+        }
+
+        return query;
+    }
+
+    void D3D12Device::setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild, bool preferFastTrace, bool allowCompaction) {
         assert(meshes != nullptr);
         assert(meshCount > 0);
 
@@ -4367,12 +4449,14 @@ namespace plume {
         inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
         inputs.NumDescs = meshCount;
         inputs.Flags = toRTASBuildFlags(preferFastBuild, preferFastTrace);
+        if (allowCompaction) inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
         inputs.pGeometryDescs = geometryDescs;
 
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info = {};
         d3d->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info);
 
         buildInfo.meshCount = meshCount;
+        buildInfo.allowCompaction = allowCompaction;
         buildInfo.preferFastBuild = preferFastBuild;
         buildInfo.preferFastTrace = preferFastTrace;
         buildInfo.scratchSize = roundUp(info.ScratchDataSizeInBytes, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);

@@ -161,6 +161,13 @@ namespace plume {
         virtual void buildBottomLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, const RenderBottomLevelASBuildInfo &buildInfo) = 0;
         virtual void buildTopLevelAS(const RenderAccelerationStructure *dstAccelerationStructure, RenderBufferReference scratchBuffer, RenderBufferReference instancesBuffer, const RenderTopLevelASBuildInfo &buildInfo) = 0;
         virtual void discardTexture(const RenderTexture* texture) = 0; // D3D12 only.
+        // Compaction commands use a graphics or compute list. Order the source BLAS
+        // build before either command, and barrier the compact destination before use.
+        // The query's first count entries are overwritten. Keep the query and both AS
+        // allocations alive until the commands finish.
+        virtual void writeBottomLevelASCompactedSizes(RenderASCompactedSizeQuery *, const RenderAccelerationStructure *const *, uint32_t) { }
+        virtual void copyBottomLevelASCompact(const RenderAccelerationStructure *, const RenderAccelerationStructure *) { }
+
         virtual void resetQueryPool(const RenderQueryPool *queryPool, uint32_t queryFirstIndex, uint32_t queryCount) = 0;
         virtual void writeTimestamp(const RenderQueryPool *queryPool, uint32_t queryIndex) = 0;
         // An OCCLUSION pool's query around draws recorded while a framebuffer is set; both calls inside
@@ -239,6 +246,12 @@ namespace plume {
         virtual std::unique_ptr<RenderTexture> createTexture(const RenderTextureDesc &desc) = 0;
     };
 
+    struct RenderASCompactedSizeQuery {
+        virtual ~RenderASCompactedSizeQuery() { }
+        // Call after the writing submission's fence completes. Does not wait.
+        virtual bool read(uint64_t *sizes, uint32_t count) const = 0;
+    };
+
     struct RenderQueryPool {
         virtual ~RenderQueryPool() { }
         virtual void queryResults() = 0;
@@ -264,7 +277,9 @@ namespace plume {
         virtual std::unique_ptr<RenderCommandSemaphore> createCommandSemaphore() = 0;
         virtual std::unique_ptr<RenderFramebuffer> createFramebuffer(const RenderFramebufferDesc &desc) = 0;
         virtual std::unique_ptr<RenderQueryPool> createQueryPool(uint32_t queryCount, RenderQueryType type = RenderQueryType::TIMESTAMP) = 0;
-        virtual void setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild = true, bool preferFastTrace = false) = 0;
+        // Null means unsupported or allocation failure. The caller chooses a fixed capacity.
+        virtual std::unique_ptr<RenderASCompactedSizeQuery> createASCompactedSizeQuery(uint32_t) { return nullptr; }
+        virtual void setBottomLevelASBuildInfo(RenderBottomLevelASBuildInfo &buildInfo, const RenderBottomLevelASMesh *meshes, uint32_t meshCount, bool preferFastBuild = true, bool preferFastTrace = false, bool allowCompaction = false) = 0;
         virtual void setTopLevelASBuildInfo(RenderTopLevelASBuildInfo &buildInfo, const RenderTopLevelASInstance *instances, uint32_t instanceCount, bool preferFastBuild = true, bool preferFastTrace = false) = 0;
         virtual void setShaderBindingTableInfo(RenderShaderBindingTableInfo &tableInfo, const RenderShaderBindingGroups &groups, const RenderPipeline *pipeline, RenderDescriptorSet **descriptorSets, uint32_t descriptorSetCount) = 0;
         virtual const RenderDeviceCapabilities &getCapabilities() const = 0;
